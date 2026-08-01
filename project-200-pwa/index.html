@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#315a4b">
+  <meta name="description" content="Project 200 is a private, offline-friendly tracker for food, exercise, and weight progress.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon-192.png" sizes="192x192">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./styles.css">
+  <title>Project 200</title>
+</head>
+<body>
+  <noscript>This app requires JavaScript to save and display your entries.</noscript>
+
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Personal fitness tracker</p>
+        <h1>Project 200</h1>
+        <p class="muted">Journey beginning August 1, 2026</p>
+      </div>
+
+      <div class="top-actions">
+        <button id="install-app" class="button secondary hidden" type="button">Install app</button>
+        <button id="show-dashboard" class="button secondary" type="button">Dashboard</button>
+        <button id="show-inputs" class="button primary" type="button">+ Add entry</button>
+      </div>
+    </header>
+
+    <section id="dashboard-screen" class="screen stack-xl" aria-labelledby="journey-heading">
+      <div class="section-heading responsive-row">
+        <div>
+          <div class="inline-row">
+            <h2 id="journey-heading">Your fitness journey</h2>
+            <span id="journey-day-badge" class="badge">Day 1</span>
+          </div>
+          <p id="journey-range" class="muted">August 1, 2026 through today</p>
+        </div>
+        <button id="dashboard-add-entry" class="button secondary" type="button">Record today</button>
+      </div>
+
+      <section id="journey-summary" class="callout" aria-live="polite">
+        <strong>Your Project 200 journey is ready to begin.</strong>
+        <span>Add your first weigh-in, meal, or exercise session.</span>
+      </section>
+
+      <section class="metrics-grid" aria-label="Journey summary metrics">
+        <article id="latest-weight-card" class="metric-card">
+          <span class="metric-label">Latest weight</span>
+          <strong id="latest-weight" class="metric-value">222.0</strong>
+          <span id="latest-weight-detail" class="metric-detail">Starting baseline</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">To goal</span>
+          <strong id="goal-gap" class="metric-value">22.0</strong>
+          <span class="metric-detail">lb remaining</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Weight change</span>
+          <strong id="journey-weight-change" class="metric-value">0.0</strong>
+          <span class="metric-detail">lb from start</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Exercise sessions</span>
+          <strong id="journey-session-count" class="metric-value">0</strong>
+          <span class="metric-detail">recorded</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Exercise time</span>
+          <strong id="journey-exercise-minutes" class="metric-value">0</strong>
+          <span class="metric-detail">total minutes</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Active days</span>
+          <strong id="active-days" class="metric-value">0</strong>
+          <span id="active-days-detail" class="metric-detail">of 1 journey day</span>
+        </article>
+      </section>
+
+      <section class="panel stack-md" aria-labelledby="weight-progress-heading">
+        <div class="responsive-row align-start">
+          <div>
+            <h3 id="weight-progress-heading">Weight progress</h3>
+            <p id="progress-description" class="muted">222 lb start · 200 lb goal</p>
+          </div>
+          <span id="progress-percent" class="badge">0%</span>
+        </div>
+
+        <div class="weight-scale" aria-label="Weight scale from goal weight in green to starting weight in red">
+          <span id="weight-position" class="weight-marker"></span>
+        </div>
+        <div class="scale-labels">
+          <span id="goal-scale-label">200 lb · Goal</span>
+          <span id="midpoint-scale-label">211 lb</span>
+          <span id="start-scale-label">222 lb · Start</span>
+        </div>
+        <div class="progress-track"><span id="progress-bar" class="progress-fill"></span></div>
+      </section>
+
+      <div class="two-column-grid">
+        <section class="panel stack-md" aria-labelledby="exercise-journey-heading">
+          <div>
+            <h3 id="exercise-journey-heading">Exercise journey</h3>
+            <p id="exercise-summary-text" class="muted">No exercise has been recorded yet.</p>
+          </div>
+
+          <div class="mini-metrics">
+            <article class="metric-card compact">
+              <span class="metric-label">Average session</span>
+              <strong id="average-session" class="metric-value small">—</strong>
+              <span class="metric-detail">minutes</span>
+            </article>
+            <article class="metric-card compact">
+              <span class="metric-label">Most recorded</span>
+              <strong id="top-activity" class="metric-text">—</strong>
+              <span id="top-activity-detail" class="metric-detail">No sessions</span>
+            </article>
+            <article class="metric-card compact">
+              <span class="metric-label">Frequency</span>
+              <strong id="weekly-frequency" class="metric-value small">0.0</strong>
+              <span class="metric-detail">sessions per week</span>
+            </article>
+          </div>
+
+          <div id="activity-breakdown" class="stack-md" aria-label="Exercise minutes by activity"></div>
+        </section>
+
+        <section class="panel stack-md" aria-labelledby="food-awareness-heading">
+          <div>
+            <h3 id="food-awareness-heading">Food awareness</h3>
+            <p class="muted">Journey-wide food logging and unplanned-eating patterns.</p>
+          </div>
+
+          <div class="mini-metrics two">
+            <article class="metric-card compact">
+              <span class="metric-label">Food entries</span>
+              <strong id="journey-food-count" class="metric-value small">0</strong>
+              <span class="metric-detail">since August 1</span>
+            </article>
+            <article class="metric-card compact">
+              <span class="metric-label">Unplanned entries</span>
+              <strong id="journey-unplanned-count" class="metric-value small">0</strong>
+              <span id="unplanned-rate" class="metric-detail">0% of entries</span>
+            </article>
+          </div>
+
+          <div>
+            <div class="responsive-row small-gap">
+              <strong>Meal mix</strong>
+              <span id="food-days-count" class="muted">0 days logged</span>
+            </div>
+            <div id="meal-mix" class="badge-wrap"></div>
+          </div>
+        </section>
+      </div>
+
+      <section class="stack-md" aria-labelledby="history-heading">
+        <div class="section-heading responsive-row">
+          <div>
+            <h3 id="history-heading">Daily history</h3>
+            <p class="muted">Review food, exercise, and weight entries for one date.</p>
+          </div>
+          <label class="field compact-field">
+            <span>History date</span>
+            <input id="review-date" type="date">
+          </label>
+        </div>
+
+        <div id="log-empty" class="empty-state">No entries recorded for this date.</div>
+        <div id="daily-log" class="stack-sm" aria-live="polite"></div>
+      </section>
+
+      <details class="panel">
+        <summary>Data, backup, and reset</summary>
+        <div class="details-content stack-md">
+          <p class="muted">Your entries are stored locally on this device. Export occasional backups in case browser data is cleared.</p>
+          <div class="button-wrap">
+            <button id="export-csv" class="button secondary" type="button">Export CSV</button>
+            <button id="export-backup" class="button secondary" type="button">Export backup</button>
+            <label class="button secondary file-label">
+              Import backup
+              <input id="import-backup" type="file" accept="application/json,.json">
+            </label>
+            <button id="clear-day" class="button secondary" type="button">Clear history date</button>
+            <button id="clear-all" class="button danger" type="button">Clear all data</button>
+          </div>
+          <p id="data-message" class="status-message" aria-live="polite"></p>
+        </div>
+      </details>
+    </section>
+
+    <section id="input-screen" class="screen stack-lg hidden" aria-labelledby="input-center-heading">
+      <div class="section-heading responsive-row">
+        <div>
+          <h2 id="input-center-heading">Add an entry</h2>
+          <p class="muted">Choose food, exercise, or weight.</p>
+        </div>
+        <button id="input-back-dashboard" class="button secondary" type="button">View dashboard</button>
+      </div>
+
+      <div class="entry-selector-grid" aria-label="Entry type selection">
+        <button type="button" class="entry-selector active" data-entry-panel="food-entry-panel">Food</button>
+        <button type="button" class="entry-selector" data-entry-panel="exercise-entry-panel">Exercise</button>
+        <button type="button" class="entry-selector" data-entry-panel="weight-entry-panel">Weight</button>
+      </div>
+
+      <section id="food-entry-panel" class="entry-panel panel stack-md" aria-labelledby="food-heading">
+        <div>
+          <h3 id="food-heading">Log food or drink</h3>
+          <p class="muted">Small bites, beverages, and food eaten while standing still count.</p>
+        </div>
+
+        <div class="form-grid">
+          <label class="field">
+            <span>Food or drink</span>
+            <input id="food-name" type="text" autocomplete="off" placeholder="Example: turkey sandwich">
+          </label>
+          <label class="field">
+            <span>Meal type</span>
+            <select id="meal-type">
+              <option>Breakfast</option>
+              <option>Lunch</option>
+              <option>Dinner</option>
+              <option>Snack</option>
+              <option>Drink</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Estimated portion</span>
+            <select id="portion-size">
+              <option>Small</option>
+              <option selected>Standard</option>
+              <option>Large</option>
+              <option>Unsure</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Entry date</span>
+            <input id="food-date" type="date">
+          </label>
+          <label class="field full-width">
+            <span>Optional note</span>
+            <input id="food-note" type="text" autocomplete="off" placeholder="Example: restaurant meal or ate while watching television">
+          </label>
+        </div>
+
+        <label class="checkbox-row">
+          <input id="unplanned-food" type="checkbox">
+          <span>This was unplanned, mindless, or eaten mainly because it was available</span>
+        </label>
+
+        <div id="selected-meal-preview" class="inline-row muted"></div>
+        <button id="add-food" class="button primary full-button" type="button">Add food entry</button>
+        <p id="food-message" class="status-message" aria-live="polite"></p>
+      </section>
+
+      <section id="exercise-entry-panel" class="entry-panel panel stack-md hidden" aria-labelledby="exercise-heading">
+        <div>
+          <h3 id="exercise-heading">Log exercise</h3>
+          <p class="muted">Record the exercise type, duration, date, and general time.</p>
+        </div>
+
+        <div class="form-grid">
+          <label class="field">
+            <span>Exercise type</span>
+            <select id="exercise-type">
+              <option>Aikido-Lite</option>
+              <option>Aikido-Intense</option>
+              <option>Jog</option>
+              <option>Gym</option>
+              <option>Other</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Duration in minutes</span>
+            <input id="exercise-duration" type="number" min="1" max="600" inputmode="numeric" placeholder="30">
+          </label>
+          <label class="field">
+            <span>Entry date</span>
+            <input id="exercise-date" type="date">
+          </label>
+          <label class="field">
+            <span>Time of day</span>
+            <select id="exercise-period">
+              <option>Morning</option>
+              <option>Afternoon</option>
+              <option selected>Evening</option>
+            </select>
+          </label>
+          <label class="field full-width">
+            <span>Optional note</span>
+            <input id="exercise-note" type="text" autocomplete="off" placeholder="Example: easy pace or upper-body workout">
+          </label>
+        </div>
+
+        <button id="add-exercise" class="button primary full-button" type="button">Add exercise entry</button>
+        <p id="exercise-message" class="status-message" aria-live="polite"></p>
+      </section>
+
+      <section id="weight-entry-panel" class="entry-panel stack-md hidden">
+        <section class="panel stack-md">
+          <div>
+            <h3>Log weight</h3>
+            <p class="muted">Record the time of day so measurements can be compared fairly.</p>
+          </div>
+
+          <div class="form-grid three">
+            <label class="field">
+              <span>Weight in pounds</span>
+              <input id="weight-value" type="number" min="80" max="500" step="0.1" inputmode="decimal" placeholder="222.0">
+            </label>
+            <label class="field">
+              <span>Weigh-in date</span>
+              <input id="weight-date" type="date">
+            </label>
+            <label class="field">
+              <span>Time of day</span>
+              <select id="weight-period">
+                <option selected>Morning</option>
+                <option>Afternoon</option>
+                <option>Evening</option>
+              </select>
+            </label>
+          </div>
+
+          <button id="add-weight" class="button primary full-button" type="button">Add weigh-in</button>
+          <p id="weight-message" class="status-message" aria-live="polite"></p>
+        </section>
+
+        <details class="panel">
+          <summary>Weight goal settings</summary>
+          <div class="details-content stack-md">
+            <div class="form-grid">
+              <label class="field">
+                <span>Starting weight</span>
+                <input id="start-weight" type="number" min="80" max="500" step="0.1" value="222">
+              </label>
+              <label class="field">
+                <span>Goal weight</span>
+                <input id="goal-weight" type="number" min="80" max="500" step="0.1" value="200">
+              </label>
+            </div>
+            <button id="save-settings" class="button secondary" type="button">Update settings</button>
+            <p id="settings-message" class="status-message" aria-live="polite"></p>
+          </div>
+        </details>
+      </section>
+
+      <button id="entry-finished" class="button secondary full-button" type="button">Finished — return to dashboard</button>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
