@@ -181,7 +181,7 @@ summary { cursor: pointer; font-weight: 700; }
 .activity-row { display: grid; gap: .35rem; }
 .activity-label { display: flex; justify-content: space-between; gap: 1rem; font-size: .84rem; }
 
-.entry-selector-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; }
+.entry-selector-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .6rem; }
 .entry-selector {
   min-height: 54px;
   border: 1px solid var(--border);
@@ -239,9 +239,22 @@ summary { cursor: pointer; font-weight: 700; }
   font-weight: 700;
 }
 
+
+.fund-panel { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.fund-reminder { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.fund-reminder > div { display: grid; gap: .2rem; }
+.fund-progress-track { height: 14px; }
+.fund-metrics.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.fund-history-details { border-top: 1px solid var(--border); padding-top: .8rem; }
+.compact-empty { padding: .8rem; }
+.fund-amount.positive { color: var(--accent); }
+.fund-amount.negative { color: var(--danger); }
+.fund-history-card { align-items: center; }
+
 @media (max-width: 800px) {
   .metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .two-column-grid { grid-template-columns: 1fr; }
+  .fund-metrics.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 600px) {
@@ -252,6 +265,9 @@ summary { cursor: pointer; font-weight: 700; }
   .responsive-row { align-items: flex-start; flex-direction: column; }
   .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mini-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .entry-selector-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fund-metrics.three { grid-template-columns: 1fr; }
+  .fund-reminder { align-items: stretch; flex-direction: column; }
   .mini-metrics > :last-child { grid-column: 1 / -1; }
   .form-grid, .form-grid.three { grid-template-columns: 1fr; }
   .compact-field { width: 100%; }

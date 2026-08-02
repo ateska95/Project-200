@@ -7,13 +7,19 @@ const EXERCISE_TYPES = ['Aikido-Lite', 'Aikido-Intense', 'Jog', 'Gym', 'Other'];
 const MEAL_TYPES = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Drink'];
 
 const DEFAULT_STATE = {
-  version: 1,
+  version: 2,
   food: [],
   exercise: [],
   weights: [],
+  japanFund: [],
   settings: {
     startWeight: 222,
-    goalWeight: 200
+    goalWeight: 200,
+    fundStartingBalance: 500,
+    fundGoalAmount: 10000,
+    fundMonthlyTarget: 850,
+    fundContributionStart: '2026-09-01',
+    fundTargetDate: '2027-08-01'
   }
 };
 
@@ -55,6 +61,49 @@ function escapeHtml(value) {
   const div = document.createElement('div');
   div.textContent = String(value ?? '');
   return div.innerHTML;
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: Number(value) % 1 ? 2 : 0,
+    maximumFractionDigits: 2
+  }).format(Number(value) || 0);
+}
+
+function monthKey(value = todayString) {
+  return String(value).slice(0, 7);
+}
+
+function addMonths(month, amount) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const date = new Date(year, monthNumber - 1 + amount, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function fundSignedAmount(entry) {
+  return entry.type === 'withdrawal' ? -entry.amount : entry.amount;
+}
+
+function fundBalance() {
+  return state.settings.fundStartingBalance + state.japanFund.reduce((sum, entry) => sum + fundSignedAmount(entry), 0);
+}
+
+function fundNetForMonth(month) {
+  return state.japanFund
+    .filter(entry => monthKey(entry.date) === month)
+    .reduce((sum, entry) => sum + fundSignedAmount(entry), 0);
+}
+
+function populateSettingsFields() {
+  $('start-weight').value = state.settings.startWeight;
+  $('goal-weight').value = state.settings.goalWeight;
+  $('fund-starting-balance').value = state.settings.fundStartingBalance;
+  $('fund-goal-amount').value = state.settings.fundGoalAmount;
+  $('fund-monthly-target').value = state.settings.fundMonthlyTarget;
+  $('fund-contribution-start').value = state.settings.fundContributionStart;
+  $('fund-target-date').value = state.settings.fundTargetDate;
 }
 
 function openDatabase() {
@@ -135,12 +184,34 @@ function normalizeState(imported) {
       }))
     : [];
 
+  normalized.japanFund = Array.isArray(imported.japanFund)
+    ? imported.japanFund.filter(item => item && typeof item.date === 'string' && Number.isFinite(Number(item.amount))).map(item => ({
+        id: item.id || makeId(),
+        createdAt: Number(item.createdAt) || Date.now(),
+        date: item.date,
+        type: item.type === 'withdrawal' ? 'withdrawal' : 'deposit',
+        amount: Math.abs(Number(item.amount)),
+        note: String(item.note || '')
+      }))
+    : [];
+
   const startWeight = Number(imported.settings?.startWeight);
   const goalWeight = Number(imported.settings?.goalWeight);
   if (Number.isFinite(startWeight) && Number.isFinite(goalWeight) && startWeight > goalWeight) {
     normalized.settings.startWeight = startWeight;
     normalized.settings.goalWeight = goalWeight;
   }
+
+  const fundStartingBalance = Number(imported.settings?.fundStartingBalance);
+  const fundGoalAmount = Number(imported.settings?.fundGoalAmount);
+  const fundMonthlyTarget = Number(imported.settings?.fundMonthlyTarget);
+  const fundContributionStart = String(imported.settings?.fundContributionStart || '');
+  const fundTargetDate = String(imported.settings?.fundTargetDate || '');
+  if (Number.isFinite(fundStartingBalance) && fundStartingBalance >= 0) normalized.settings.fundStartingBalance = fundStartingBalance;
+  if (Number.isFinite(fundGoalAmount) && fundGoalAmount > 0) normalized.settings.fundGoalAmount = fundGoalAmount;
+  if (Number.isFinite(fundMonthlyTarget) && fundMonthlyTarget > 0) normalized.settings.fundMonthlyTarget = fundMonthlyTarget;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fundContributionStart)) normalized.settings.fundContributionStart = fundContributionStart;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fundTargetDate)) normalized.settings.fundTargetDate = fundTargetDate;
 
   return normalized;
 }
@@ -166,6 +237,17 @@ function showEntryPanel(panelId) {
   document.querySelectorAll('.entry-selector').forEach(button => {
     button.classList.toggle('active', button.dataset.entryPanel === panelId);
   });
+}
+
+function openFundEntry(suggestedAmount = null) {
+  showScreen('input-screen');
+  showEntryPanel('fund-entry-panel');
+  $('fund-entry-type').value = 'deposit';
+  $('fund-entry-date').value = todayString;
+  if (suggestedAmount !== null && suggestedAmount > 0) {
+    $('fund-entry-amount').value = Number(suggestedAmount).toFixed(2).replace(/\.00$/, '');
+  }
+  window.setTimeout(() => $('fund-entry-amount').focus(), 120);
 }
 
 function journeyDayCount() {
@@ -311,12 +393,88 @@ function renderJourneyDashboard() {
   }
 }
 
+function renderJapanFund() {
+  const balance = fundBalance();
+  const goal = state.settings.fundGoalAmount;
+  const remaining = Math.max(0, goal - balance);
+  const progress = goal > 0 ? Math.max(0, Math.min(1, balance / goal)) : 0;
+  const currentMonth = monthKey();
+  const startMonth = monthKey(state.settings.fundContributionStart);
+  const targetMonth = monthKey(state.settings.fundTargetDate);
+  const monthlyNet = fundNetForMonth(currentMonth);
+  const monthlySaved = Math.max(0, monthlyNet);
+  const monthlyRemaining = Math.max(0, state.settings.fundMonthlyTarget - monthlyNet);
+
+  $('fund-progress-percent').textContent = `${Math.round(progress * 100)}%`;
+  $('fund-plan-description').textContent = `${formatCurrency(state.settings.fundStartingBalance)} starting balance · ${formatCurrency(state.settings.fundMonthlyTarget)} monthly · ${formatCurrency(goal)} goal`;
+  $('fund-balance').textContent = formatCurrency(balance);
+  $('fund-balance-detail').textContent = `of ${formatCurrency(goal)} goal`;
+  $('fund-remaining').textContent = formatCurrency(remaining);
+  $('fund-monthly-saved').textContent = formatCurrency(monthlySaved);
+  $('fund-monthly-detail').textContent = `of ${formatCurrency(state.settings.fundMonthlyTarget)} target`;
+  $('fund-progress-bar').style.width = `${progress * 100}%`;
+  $('fund-start-label').textContent = `${formatCurrency(state.settings.fundStartingBalance)} start`;
+  $('fund-goal-label').textContent = `${formatCurrency(goal)} goal`;
+  $('fund-entry-balance').textContent = `Current balance: ${formatCurrency(balance)}`;
+  $('fund-entry-goal-detail').textContent = balance >= goal
+    ? `The ${formatCurrency(goal)} trip-fund goal has been reached.`
+    : `${formatCurrency(remaining)} remaining toward the ${formatCurrency(goal)} goal.`;
+
+  const reminder = $('fund-reminder');
+  reminder.classList.add('hidden');
+
+  if (balance >= goal) {
+    $('fund-next-contribution').textContent = `Goal reached · target ${formatDate(state.settings.fundTargetDate, false)}`;
+  } else if (currentMonth < startMonth) {
+    $('fund-next-contribution').textContent = `First contribution ${formatDate(state.settings.fundContributionStart, false)}`;
+  } else if (currentMonth > targetMonth) {
+    $('fund-next-contribution').textContent = `Target date passed · ${formatDate(state.settings.fundTargetDate, false)}`;
+  } else if (monthlyRemaining > 0) {
+    $('fund-next-contribution').textContent = `${formatCurrency(monthlyRemaining)} remaining this month`;
+    $('fund-reminder-title').textContent = 'Japan fund contribution due';
+    $('fund-reminder-text').textContent = `Record ${formatCurrency(monthlyRemaining)} more for ${parseLocalDate(`${currentMonth}-01`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}.`;
+    reminder.classList.remove('hidden');
+  } else {
+    const nextMonth = addMonths(currentMonth, 1);
+    $('fund-next-contribution').textContent = nextMonth <= targetMonth
+      ? `Next ${formatCurrency(state.settings.fundMonthlyTarget)} contribution: ${formatDate(`${nextMonth}-01`, false)}`
+      : `Monthly plan complete through ${formatDate(state.settings.fundTargetDate, false)}`;
+  }
+
+  const entries = [...state.japanFund].sort((a, b) => {
+    if (a.date !== b.date) return b.date.localeCompare(a.date);
+    return b.createdAt - a.createdAt;
+  });
+  $('fund-history-empty').hidden = entries.length > 0;
+  $('fund-history').innerHTML = entries.map(entry => {
+    const signed = fundSignedAmount(entry);
+    const label = entry.type === 'withdrawal' ? 'Withdrawal' : 'Deposit';
+    return `
+      <article class="history-card fund-history-card">
+        <div class="history-main">
+          <div class="history-title"><span class="badge">${label}</span><strong class="fund-amount ${signed < 0 ? 'negative' : 'positive'}">${signed < 0 ? '−' : '+'}${formatCurrency(Math.abs(signed))}</strong></div>
+          <div class="history-meta"><span class="muted">${formatDate(entry.date)}</span></div>
+          ${entry.note ? `<p class="history-note">${escapeHtml(entry.note)}</p>` : ''}
+        </div>
+        <button type="button" class="remove-button fund-remove-button" data-id="${entry.id}">Remove</button>
+      </article>`;
+  }).join('');
+
+  document.querySelectorAll('.fund-remove-button').forEach(button => {
+    button.addEventListener('click', async () => {
+      state.japanFund = state.japanFund.filter(item => item.id !== button.dataset.id);
+      await commitState($('fund-entry-message'), 'Fund activity removed.');
+    });
+  });
+}
+
 function renderDailyLog() {
   const date = $('review-date').value;
   const entries = [
     ...state.food.filter(item => item.date === date).map(item => ({ ...item, recordType: 'Food' })),
     ...state.exercise.filter(item => item.date === date).map(item => ({ ...item, recordType: 'Exercise' })),
-    ...state.weights.filter(item => item.date === date).map(item => ({ ...item, recordType: 'Weight' }))
+    ...state.weights.filter(item => item.date === date).map(item => ({ ...item, recordType: 'Weight' })),
+    ...state.japanFund.filter(item => item.date === date).map(item => ({ ...item, recordType: 'Fund' }))
   ].sort((a, b) => b.createdAt - a.createdAt);
 
   $('log-empty').hidden = entries.length > 0;
@@ -347,6 +505,19 @@ function renderDailyLog() {
         </article>`;
     }
 
+    if (entry.recordType === 'Fund') {
+      const signed = fundSignedAmount(entry);
+      return `
+        <article class="history-card">
+          <div class="history-main">
+            <div class="history-title"><span class="badge">Japan fund</span><strong class="fund-amount ${signed < 0 ? 'negative' : 'positive'}">${signed < 0 ? '−' : '+'}${formatCurrency(Math.abs(signed))}</strong></div>
+            <div class="history-meta"><span class="badge">${entry.type === 'withdrawal' ? 'Withdrawal' : 'Deposit'}</span></div>
+            ${entry.note ? `<p class="history-note">${escapeHtml(entry.note)}</p>` : ''}
+          </div>
+          <button type="button" class="remove-button" data-kind="fund" data-id="${entry.id}">Remove</button>
+        </article>`;
+    }
+
     const colors = weightColor(entry.weight);
     return `
       <article class="history-card" style="background:${colors.soft};border-color:${colors.border}">
@@ -361,12 +532,13 @@ function renderDailyLog() {
       </article>`;
   }).join('');
 
-  document.querySelectorAll('.remove-button').forEach(button => {
+  document.querySelectorAll('#daily-log .remove-button').forEach(button => {
     button.addEventListener('click', async () => {
       const { kind, id } = button.dataset;
       if (kind === 'food') state.food = state.food.filter(item => item.id !== id);
       if (kind === 'exercise') state.exercise = state.exercise.filter(item => item.id !== id);
       if (kind === 'weight') state.weights = state.weights.filter(item => item.id !== id);
+      if (kind === 'fund') state.japanFund = state.japanFund.filter(item => item.id !== id);
       await commitState();
     });
   });
@@ -374,6 +546,7 @@ function renderDailyLog() {
 
 function updateAll() {
   renderJourneyDashboard();
+  renderJapanFund();
   renderDailyLog();
 }
 
@@ -463,6 +636,53 @@ async function addWeight() {
   await commitState($('weight-message'), 'Weigh-in saved.');
 }
 
+async function addFundEntry() {
+  const amount = Number($('fund-entry-amount').value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    $('fund-entry-message').textContent = 'Enter a positive dollar amount.';
+    $('fund-entry-amount').focus();
+    return;
+  }
+
+  state.japanFund.push({
+    id: makeId(),
+    createdAt: Date.now(),
+    date: $('fund-entry-date').value || todayString,
+    type: $('fund-entry-type').value === 'withdrawal' ? 'withdrawal' : 'deposit',
+    amount,
+    note: $('fund-entry-note').value.trim()
+  });
+
+  $('review-date').value = $('fund-entry-date').value;
+  $('fund-entry-amount').value = '';
+  $('fund-entry-note').value = '';
+  await commitState($('fund-entry-message'), 'Japan fund activity saved.');
+}
+
+async function saveFundSettings() {
+  const startingBalance = Number($('fund-starting-balance').value);
+  const goalAmount = Number($('fund-goal-amount').value);
+  const monthlyTarget = Number($('fund-monthly-target').value);
+  const contributionStart = $('fund-contribution-start').value;
+  const targetDate = $('fund-target-date').value;
+
+  if (!Number.isFinite(startingBalance) || startingBalance < 0 || !Number.isFinite(goalAmount) || goalAmount <= 0 || !Number.isFinite(monthlyTarget) || monthlyTarget <= 0) {
+    $('fund-settings-message').textContent = 'Enter valid nonnegative starting cash and positive goal and monthly amounts.';
+    return;
+  }
+  if (!contributionStart || !targetDate || contributionStart > targetDate) {
+    $('fund-settings-message').textContent = 'The first reminder date must be on or before the target date.';
+    return;
+  }
+
+  state.settings.fundStartingBalance = startingBalance;
+  state.settings.fundGoalAmount = goalAmount;
+  state.settings.fundMonthlyTarget = monthlyTarget;
+  state.settings.fundContributionStart = contributionStart;
+  state.settings.fundTargetDate = targetDate;
+  await commitState($('fund-settings-message'), 'Japan fund settings saved.');
+}
+
 async function saveSettings() {
   const start = Number($('start-weight').value);
   const goal = Number($('goal-weight').value);
@@ -488,10 +708,11 @@ function downloadFile(filename, content, type) {
 }
 
 function exportCsv() {
-  const rows = [['Date', 'Clock Time', 'Record Type', 'Name', 'Category', 'Portion or Duration', 'Time of Day', 'Unplanned', 'Weight', 'Note']];
+  const rows = [['Date', 'Clock Time', 'Record Type', 'Name', 'Category', 'Portion, Duration, or Amount', 'Time of Day', 'Unplanned', 'Weight', 'Note']];
   state.food.forEach(entry => rows.push([entry.date, entry.time, 'Food', entry.name, entry.meal, entry.portion, '', entry.unplanned ? 'Yes' : 'No', '', entry.note]));
   state.exercise.forEach(entry => rows.push([entry.date, '', 'Exercise', entry.exerciseType, entry.exerciseType, `${entry.duration} minutes`, entry.period, '', '', entry.note]));
   state.weights.forEach(entry => rows.push([entry.date, '', 'Weight', '', '', '', entry.period, '', entry.weight, '']));
+  state.japanFund.forEach(entry => rows.push([entry.date, '', 'Japan Fund', entry.type === 'withdrawal' ? 'Withdrawal' : 'Deposit', 'Japan 2027', fundSignedAmount(entry).toFixed(2), '', '', '', entry.note]));
   const csv = rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n');
   downloadFile(`project-200-data-${todayString}.csv`, csv, 'text/csv;charset=utf-8');
 }
@@ -502,14 +723,14 @@ async function clearSelectedDay() {
   state.food = state.food.filter(entry => entry.date !== selected);
   state.exercise = state.exercise.filter(entry => entry.date !== selected);
   state.weights = state.weights.filter(entry => entry.date !== selected);
+  state.japanFund = state.japanFund.filter(entry => entry.date !== selected);
   await commitState($('data-message'), 'Selected day cleared.');
 }
 
 async function clearAllData() {
-  if (!window.confirm('Clear every food, exercise, and weight entry? This cannot be undone unless you have a backup.')) return;
+  if (!window.confirm('Clear every health and Japan fund entry? This cannot be undone unless you have a backup.')) return;
   state = structuredClone(DEFAULT_STATE);
-  $('start-weight').value = state.settings.startWeight;
-  $('goal-weight').value = state.settings.goalWeight;
+  populateSettingsFields();
   await commitState($('data-message'), 'All tracked data was cleared.');
 }
 
@@ -517,8 +738,7 @@ async function importBackup(file) {
   const text = await file.text();
   const imported = JSON.parse(text);
   state = normalizeState(imported);
-  $('start-weight').value = state.settings.startWeight;
-  $('goal-weight').value = state.settings.goalWeight;
+  populateSettingsFields();
   await commitState($('data-message'), 'Backup imported successfully.');
 }
 
@@ -561,6 +781,13 @@ function bindEvents() {
   $('add-food').addEventListener('click', addFood);
   $('add-exercise').addEventListener('click', addExercise);
   $('add-weight').addEventListener('click', addWeight);
+  $('add-fund-entry').addEventListener('click', addFundEntry);
+  $('save-fund-settings').addEventListener('click', saveFundSettings);
+  $('dashboard-add-fund').addEventListener('click', () => openFundEntry());
+  $('fund-reminder-add').addEventListener('click', () => {
+    const due = Math.max(0, state.settings.fundMonthlyTarget - fundNetForMonth(monthKey()));
+    openFundEntry(due || state.settings.fundMonthlyTarget);
+  });
   $('save-settings').addEventListener('click', saveSettings);
   $('export-csv').addEventListener('click', exportCsv);
   $('export-backup').addEventListener('click', () => downloadFile(`project-200-backup-${todayString}.json`, JSON.stringify(state, null, 2), 'application/json'));
@@ -584,12 +811,14 @@ function bindEvents() {
   $('food-name').addEventListener('keydown', event => { if (event.key === 'Enter') addFood(); });
   $('exercise-duration').addEventListener('keydown', event => { if (event.key === 'Enter') addExercise(); });
   $('weight-value').addEventListener('keydown', event => { if (event.key === 'Enter') addWeight(); });
+  $('fund-entry-amount').addEventListener('keydown', event => { if (event.key === 'Enter') addFundEntry(); });
 }
 
 async function initialize() {
   $('food-date').value = todayString;
   $('exercise-date').value = todayString;
   $('weight-date').value = todayString;
+  $('fund-entry-date').value = todayString;
   $('review-date').value = todayString;
 
   try {
@@ -601,8 +830,7 @@ async function initialize() {
     $('data-message').textContent = 'Local storage could not be opened. Entries may not persist.';
   }
 
-  $('start-weight').value = state.settings.startWeight;
-  $('goal-weight').value = state.settings.goalWeight;
+  populateSettingsFields();
 
   bindEvents();
   setupInstallFlow();

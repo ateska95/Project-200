@@ -1,11 +1,13 @@
 # Project 200 PWA
 
-A private, installable fitness tracker for food, exercise, and weight progress beginning August 1, 2026.
+A private, installable tracker for fitness progress and the Japan 2027 reward fund, beginning August 1, 2026.
 
 ## Included features
 
 - Two-screen design: journey dashboard and input center
 - Food, exercise, and weight entry forms
+- Japan 2027 cash tracker with a $500 starting balance, $10,000 goal, and $850 monthly contribution plan
+- In-app monthly contribution reminder and deposit/withdrawal history
 - Red-to-green weight progress visualization
 - Journey-wide exercise and food summaries
 - IndexedDB storage on the device
@@ -15,7 +17,7 @@ A private, installable fitness tracker for food, exercise, and weight progress b
 
 ## Important data note
 
-Entries are saved in the browser's local IndexedDB database. They are not uploaded to a server. Clearing browser/site storage can delete them, so export periodic JSON backups.
+Health and Japan fund entries are saved in the browser's local IndexedDB database. They are not uploaded to a server. Clearing browser/site storage can delete them, so export periodic JSON backups.
 
 ## Test locally
 
@@ -45,4 +47,6 @@ Then open `http://localhost:8000` in a desktop browser.
 
 ## Updating the app
 
-Edit the files in the hosted repository. The service worker will cache the new files after the deployed site is revisited. When making major changes, update `CACHE_NAME` in `sw.js` so older cached files are removed.
+Edit the files in the hosted repository. The service worker will cache the new files after the deployed site is revisited. This package uses `project-200-v2`. When making another major change, update `CACHE_NAME` in `sw.js` to `project-200-v3` so older cached files are removed.
+
+The Japan fund reminder is an in-app reminder: it appears when Project 200 is opened during a month whose planned contribution has not yet been fully recorded.

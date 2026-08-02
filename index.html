@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#315a4b">
-  <meta name="description" content="Project 200 is a private, offline-friendly tracker for food, exercise, and weight progress.">
+  <meta name="description" content="Project 200 is a private, offline-friendly tracker for fitness progress and the Japan 2027 savings goal.">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png" sizes="192x192">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
@@ -17,7 +17,7 @@
   <main class="app-shell">
     <header class="topbar">
       <div>
-        <p class="eyebrow">Personal fitness tracker</p>
+        <p class="eyebrow">Fitness and Japan reward tracker</p>
         <h1>Project 200</h1>
         <p class="muted">Journey beginning August 1, 2026</p>
       </div>
@@ -44,6 +44,60 @@
       <section id="journey-summary" class="callout" aria-live="polite">
         <strong>Your Project 200 journey is ready to begin.</strong>
         <span>Add your first weigh-in, meal, or exercise session.</span>
+      </section>
+
+      <section id="japan-fund-panel" class="panel fund-panel stack-md" aria-labelledby="japan-fund-heading">
+        <div class="responsive-row align-start">
+          <div>
+            <div class="inline-row">
+              <h3 id="japan-fund-heading">Japan 2027 fund</h3>
+              <span id="fund-progress-percent" class="badge">5%</span>
+            </div>
+            <p id="fund-plan-description" class="muted">$500 starting balance · $850 monthly · $10,000 goal</p>
+          </div>
+          <button id="dashboard-add-fund" class="button primary" type="button">Add money</button>
+        </div>
+
+        <div id="fund-reminder" class="callout fund-reminder hidden" aria-live="polite">
+          <div>
+            <strong id="fund-reminder-title">Japan fund contribution due</strong>
+            <span id="fund-reminder-text">Add $850 this month.</span>
+          </div>
+          <button id="fund-reminder-add" class="button primary" type="button">Record contribution</button>
+        </div>
+
+        <div class="mini-metrics three fund-metrics">
+          <article class="metric-card compact">
+            <span class="metric-label">Current balance</span>
+            <strong id="fund-balance" class="metric-value small">$500</strong>
+            <span id="fund-balance-detail" class="metric-detail">of $10,000 goal</span>
+          </article>
+          <article class="metric-card compact">
+            <span class="metric-label">Remaining</span>
+            <strong id="fund-remaining" class="metric-value small">$9,500</strong>
+            <span class="metric-detail">to trip budget</span>
+          </article>
+          <article class="metric-card compact">
+            <span class="metric-label">This month</span>
+            <strong id="fund-monthly-saved" class="metric-value small">$0</strong>
+            <span id="fund-monthly-detail" class="metric-detail">of $850 target</span>
+          </article>
+        </div>
+
+        <div class="progress-track fund-progress-track"><span id="fund-progress-bar" class="progress-fill"></span></div>
+        <div class="scale-labels">
+          <span id="fund-start-label">$500 start</span>
+          <span id="fund-next-contribution">First contribution September 1</span>
+          <span id="fund-goal-label">$10,000 goal</span>
+        </div>
+
+        <details class="fund-history-details">
+          <summary>Cash activity</summary>
+          <div class="details-content stack-sm">
+            <div id="fund-history-empty" class="empty-state compact-empty">No deposits or withdrawals recorded yet.</div>
+            <div id="fund-history" class="stack-sm" aria-live="polite"></div>
+          </div>
+        </details>
       </section>
 
       <section class="metrics-grid" aria-label="Journey summary metrics">
@@ -160,7 +214,7 @@
         <div class="section-heading responsive-row">
           <div>
             <h3 id="history-heading">Daily history</h3>
-            <p class="muted">Review food, exercise, and weight entries for one date.</p>
+            <p class="muted">Review health and Japan fund entries for one date.</p>
           </div>
           <label class="field compact-field">
             <span>History date</span>
@@ -175,7 +229,7 @@
       <details class="panel">
         <summary>Data, backup, and reset</summary>
         <div class="details-content stack-md">
-          <p class="muted">Your entries are stored locally on this device. Export occasional backups in case browser data is cleared.</p>
+          <p class="muted">Your health and Japan fund entries are stored locally on this device. Export occasional backups in case browser data is cleared.</p>
           <div class="button-wrap">
             <button id="export-csv" class="button secondary" type="button">Export CSV</button>
             <button id="export-backup" class="button secondary" type="button">Export backup</button>
@@ -195,7 +249,7 @@
       <div class="section-heading responsive-row">
         <div>
           <h2 id="input-center-heading">Add an entry</h2>
-          <p class="muted">Choose food, exercise, or weight.</p>
+          <p class="muted">Choose food, exercise, weight, or Japan fund activity.</p>
         </div>
         <button id="input-back-dashboard" class="button secondary" type="button">View dashboard</button>
       </div>
@@ -204,6 +258,7 @@
         <button type="button" class="entry-selector active" data-entry-panel="food-entry-panel">Food</button>
         <button type="button" class="entry-selector" data-entry-panel="exercise-entry-panel">Exercise</button>
         <button type="button" class="entry-selector" data-entry-panel="weight-entry-panel">Weight</button>
+        <button type="button" class="entry-selector" data-entry-panel="fund-entry-panel">Japan fund</button>
       </div>
 
       <section id="food-entry-panel" class="entry-panel panel stack-md" aria-labelledby="food-heading">
@@ -344,6 +399,77 @@
             </div>
             <button id="save-settings" class="button secondary" type="button">Update settings</button>
             <p id="settings-message" class="status-message" aria-live="polite"></p>
+          </div>
+        </details>
+      </section>
+
+
+      <section id="fund-entry-panel" class="entry-panel stack-md hidden">
+        <section class="panel stack-md" aria-labelledby="fund-entry-heading">
+          <div>
+            <h3 id="fund-entry-heading">Log Japan fund activity</h3>
+            <p class="muted">Record money added to the trip fund or money spent from it on booked travel.</p>
+          </div>
+
+          <div id="fund-entry-summary" class="callout">
+            <strong id="fund-entry-balance">Current balance: $500</strong>
+            <span id="fund-entry-goal-detail">$9,500 remaining toward the $10,000 goal.</span>
+          </div>
+
+          <div class="form-grid">
+            <label class="field">
+              <span>Activity type</span>
+              <select id="fund-entry-type">
+                <option value="deposit" selected>Deposit</option>
+                <option value="withdrawal">Withdrawal or trip purchase</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Amount</span>
+              <input id="fund-entry-amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="850">
+            </label>
+            <label class="field">
+              <span>Activity date</span>
+              <input id="fund-entry-date" type="date">
+            </label>
+            <label class="field">
+              <span>Optional note</span>
+              <input id="fund-entry-note" type="text" autocomplete="off" placeholder="Example: September contribution or airline tickets">
+            </label>
+          </div>
+
+          <button id="add-fund-entry" class="button primary full-button" type="button">Add fund activity</button>
+          <p id="fund-entry-message" class="status-message" aria-live="polite"></p>
+        </section>
+
+        <details class="panel">
+          <summary>Japan fund settings</summary>
+          <div class="details-content stack-md">
+            <div class="form-grid">
+              <label class="field">
+                <span>Starting balance</span>
+                <input id="fund-starting-balance" type="number" min="0" step="0.01" value="500">
+              </label>
+              <label class="field">
+                <span>Trip budget goal</span>
+                <input id="fund-goal-amount" type="number" min="1" step="0.01" value="10000">
+              </label>
+              <label class="field">
+                <span>Monthly contribution target</span>
+                <input id="fund-monthly-target" type="number" min="1" step="0.01" value="850">
+              </label>
+              <label class="field">
+                <span>First monthly reminder</span>
+                <input id="fund-contribution-start" type="date" value="2026-09-01">
+              </label>
+              <label class="field">
+                <span>Trip-fund target date</span>
+                <input id="fund-target-date" type="date" value="2027-08-01">
+              </label>
+            </div>
+            <p class="muted">The reminder appears inside Project 200 when you open the app on or after the first of a contribution month.</p>
+            <button id="save-fund-settings" class="button secondary" type="button">Update fund settings</button>
+            <p id="fund-settings-message" class="status-message" aria-live="polite"></p>
           </div>
         </details>
       </section>
