@@ -1,13 +1,13 @@
 {
   "name": "Project 200 Fitness and Japan Tracker",
   "short_name": "Project 200",
-  "description": "A private, offline-friendly tracker for fitness progress and the Japan 2027 savings goal.",
+  "description": "A private, offline-friendly four-tab tracker for food, weight, exercise, and the Japan 2027 savings goal.",
   "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f4f6f4",
-  "theme_color": "#315a4b",
+  "background_color": "#f3f5f2",
+  "theme_color": "#24483c",
   "orientation": "portrait-primary",
   "categories": [
     "health",

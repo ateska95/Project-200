@@ -1,4 +1,4 @@
-const CACHE_NAME = 'project-200-v2';
+const CACHE_NAME = 'project-200-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -41,14 +41,14 @@ self.addEventListener('fetch', event => {
   }
 
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
-      return fetch(event.request).then(response => {
-        if (!response || response.status !== 200 || response.type === 'opaque') return response;
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+    fetch(event.request)
+      .then(response => {
+        if (response && response.status === 200 && response.type !== 'opaque') {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+        }
         return response;
-      });
-    })
+      })
+      .catch(() => caches.match(event.request))
   );
 });

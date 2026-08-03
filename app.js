@@ -7,7 +7,7 @@ const EXERCISE_TYPES = ['Aikido-Lite', 'Aikido-Intense', 'Jog', 'Gym', 'Other'];
 const MEAL_TYPES = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Drink'];
 
 const DEFAULT_STATE = {
-  version: 2,
+  version: 3,
   food: [],
   exercise: [],
   weights: [],
@@ -25,6 +25,8 @@ const DEFAULT_STATE = {
 
 let state = structuredClone(DEFAULT_STATE);
 let deferredInstallPrompt = null;
+let foodWeekStart = '';
+let exerciseWeekStart = '';
 
 const $ = id => document.getElementById(id);
 
@@ -38,15 +40,42 @@ function localDateString(date = new Date()) {
 const todayString = localDateString();
 
 function parseLocalDate(value) {
-  const [year, month, day] = value.split('-').map(Number);
+  const [year, month, day] = String(value).split('-').map(Number);
   return new Date(year, month - 1, day);
 }
 
-function formatDate(value, includeYear = true) {
+function addDays(value, amount) {
   const date = parseLocalDate(value);
-  return date.toLocaleDateString(undefined, includeYear
+  date.setDate(date.getDate() + amount);
+  return localDateString(date);
+}
+
+function startOfWeek(value = todayString) {
+  const date = parseLocalDate(value);
+  const mondayOffset = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - mondayOffset);
+  return localDateString(date);
+}
+
+function weekDates(weekStart) {
+  return Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
+}
+
+function formatDate(value, includeYear = true) {
+  return parseLocalDate(value).toLocaleDateString(undefined, includeYear
     ? { month: 'long', day: 'numeric', year: 'numeric' }
     : { month: 'short', day: 'numeric' });
+}
+
+function formatWeekRange(weekStart) {
+  const weekEnd = addDays(weekStart, 6);
+  const startDate = parseLocalDate(weekStart);
+  const endDate = parseLocalDate(weekEnd);
+  const sameMonth = startDate.getMonth() === endDate.getMonth() && startDate.getFullYear() === endDate.getFullYear();
+  if (sameMonth) {
+    return `${startDate.toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}–${endDate.getDate()}, ${endDate.getFullYear()}`;
+  }
+  return `${startDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}–${endDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
 }
 
 function currentTime() {
@@ -76,11 +105,19 @@ function monthKey(value = todayString) {
   return String(value).slice(0, 7);
 }
 
-function addMonths(month, amount) {
-  const [year, monthNumber] = month.split('-').map(Number);
-  const date = new Date(year, monthNumber - 1 + amount, 1);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+function journeyDayCount() {
+  const start = parseLocalDate(JOURNEY_START);
+  const today = parseLocalDate(todayString);
+  return Math.max(1, Math.floor((today - start) / 86400000) + 1);
 }
+
+function withinJourney(entry) {
+  return entry.date >= JOURNEY_START && entry.date <= todayString;
+}
+
+function journeyFood() { return state.food.filter(withinJourney); }
+function journeyExercise() { return state.exercise.filter(withinJourney); }
+function journeyWeights() { return state.weights.filter(withinJourney); }
 
 function fundSignedAmount(entry) {
   return entry.type === 'withdrawal' ? -entry.amount : entry.amount;
@@ -96,24 +133,12 @@ function fundNetForMonth(month) {
     .reduce((sum, entry) => sum + fundSignedAmount(entry), 0);
 }
 
-function populateSettingsFields() {
-  $('start-weight').value = state.settings.startWeight;
-  $('goal-weight').value = state.settings.goalWeight;
-  $('fund-starting-balance').value = state.settings.fundStartingBalance;
-  $('fund-goal-amount').value = state.settings.fundGoalAmount;
-  $('fund-monthly-target').value = state.settings.fundMonthlyTarget;
-  $('fund-contribution-start').value = state.settings.fundContributionStart;
-  $('fund-target-date').value = state.settings.fundTargetDate;
-}
-
 function openDatabase() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
-      }
+      if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -136,10 +161,7 @@ async function saveState() {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite');
     transaction.objectStore(STORE_NAME).put(state, STATE_KEY);
-    transaction.oncomplete = () => {
-      db.close();
-      resolve();
-    };
+    transaction.oncomplete = () => { db.close(); resolve(); };
     transaction.onerror = () => reject(transaction.error);
   });
 }
@@ -202,417 +224,357 @@ function normalizeState(imported) {
     normalized.settings.goalWeight = goalWeight;
   }
 
-  const fundStartingBalance = Number(imported.settings?.fundStartingBalance);
-  const fundGoalAmount = Number(imported.settings?.fundGoalAmount);
-  const fundMonthlyTarget = Number(imported.settings?.fundMonthlyTarget);
-  const fundContributionStart = String(imported.settings?.fundContributionStart || '');
-  const fundTargetDate = String(imported.settings?.fundTargetDate || '');
-  if (Number.isFinite(fundStartingBalance) && fundStartingBalance >= 0) normalized.settings.fundStartingBalance = fundStartingBalance;
-  if (Number.isFinite(fundGoalAmount) && fundGoalAmount > 0) normalized.settings.fundGoalAmount = fundGoalAmount;
-  if (Number.isFinite(fundMonthlyTarget) && fundMonthlyTarget > 0) normalized.settings.fundMonthlyTarget = fundMonthlyTarget;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(fundContributionStart)) normalized.settings.fundContributionStart = fundContributionStart;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(fundTargetDate)) normalized.settings.fundTargetDate = fundTargetDate;
+  const numericSettings = [
+    ['fundStartingBalance', 0, true],
+    ['fundGoalAmount', 0, false],
+    ['fundMonthlyTarget', 0, false]
+  ];
+  numericSettings.forEach(([key, floor, allowEqual]) => {
+    const value = Number(imported.settings?.[key]);
+    if (Number.isFinite(value) && (allowEqual ? value >= floor : value > floor)) normalized.settings[key] = value;
+  });
+
+  ['fundContributionStart', 'fundTargetDate'].forEach(key => {
+    const value = String(imported.settings?.[key] || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) normalized.settings[key] = value;
+  });
 
   return normalized;
 }
 
-function showScreen(screenId) {
-  document.querySelectorAll('.screen').forEach(screen => {
-    screen.classList.toggle('hidden', screen.id !== screenId);
+function populateSettingsFields() {
+  $('start-weight').value = state.settings.startWeight;
+  $('goal-weight').value = state.settings.goalWeight;
+  $('fund-starting-balance').value = state.settings.fundStartingBalance;
+  $('fund-goal-amount').value = state.settings.fundGoalAmount;
+  $('fund-monthly-target').value = state.settings.fundMonthlyTarget;
+  $('fund-contribution-start').value = state.settings.fundContributionStart;
+  $('fund-target-date').value = state.settings.fundTargetDate;
+}
+
+function showTab(tabName) {
+  document.querySelectorAll('[data-screen]').forEach(screen => {
+    screen.classList.toggle('hidden', screen.dataset.screen !== tabName);
   });
-
-  const dashboardActive = screenId === 'dashboard-screen';
-  $('show-dashboard').classList.toggle('primary', dashboardActive);
-  $('show-dashboard').classList.toggle('secondary', !dashboardActive);
-  $('show-inputs').classList.toggle('primary', !dashboardActive);
-  $('show-inputs').classList.toggle('secondary', dashboardActive);
-
+  document.querySelectorAll('[data-tab]').forEach(button => {
+    const active = button.dataset.tab === tabName;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  try { localStorage.setItem('project-200-active-tab', tabName); } catch (_) {}
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-function showEntryPanel(panelId) {
-  document.querySelectorAll('.entry-panel').forEach(panel => {
-    panel.classList.toggle('hidden', panel.id !== panelId);
-  });
-  document.querySelectorAll('.entry-selector').forEach(button => {
-    button.classList.toggle('active', button.dataset.entryPanel === panelId);
-  });
-}
-
-function openFundEntry(suggestedAmount = null) {
-  showScreen('input-screen');
-  showEntryPanel('fund-entry-panel');
-  $('fund-entry-type').value = 'deposit';
-  $('fund-entry-date').value = todayString;
-  if (suggestedAmount !== null && suggestedAmount > 0) {
-    $('fund-entry-amount').value = Number(suggestedAmount).toFixed(2).replace(/\.00$/, '');
-  }
-  window.setTimeout(() => $('fund-entry-amount').focus(), 120);
-}
-
-function journeyDayCount() {
-  const start = parseLocalDate(JOURNEY_START);
-  const today = parseLocalDate(todayString);
-  return Math.max(1, Math.floor((today - start) / 86400000) + 1);
-}
-
-function withinJourney(entry) {
-  return entry.date >= JOURNEY_START && entry.date <= todayString;
-}
-
-function journeyFood() { return state.food.filter(withinJourney); }
-function journeyExercise() { return state.exercise.filter(withinJourney); }
-function journeyWeights() { return state.weights.filter(withinJourney); }
-
 function sortedWeights() {
-  return [...journeyWeights()].sort((a, b) => {
-    if (a.date !== b.date) return b.date.localeCompare(a.date);
-    return b.createdAt - a.createdAt;
-  });
+  return [...journeyWeights()].sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
 }
 
 function latestWeightEntry() {
-  return sortedWeights()[0] || null;
+  const entries = sortedWeights();
+  return entries.at(-1) || null;
 }
 
 function weightProgress(weight) {
-  const range = state.settings.startWeight - state.settings.goalWeight;
-  if (range <= 0) return 0;
-  return Math.max(0, Math.min(1, (state.settings.startWeight - weight) / range));
+  const start = state.settings.startWeight;
+  const goal = state.settings.goalWeight;
+  return Math.max(0, Math.min(100, ((start - weight) / (start - goal)) * 100));
 }
 
-function weightColor(weight) {
-  const progress = weightProgress(weight);
-  const hue = Math.round(progress * 120);
-  return {
-    solid: `hsl(${hue} 68% 43%)`,
-    soft: `hsl(${hue} 70% 48% / 0.12)`,
-    border: `hsl(${hue} 60% 40% / 0.65)`,
-    progress
-  };
+function mealClass(meal) {
+  return `meal-${String(meal).toLowerCase()}`;
 }
 
-function mealBadge(meal, count = null) {
-  const text = count === null ? meal : `${meal} ${count}`;
-  return `<span class="meal-badge meal-${meal.toLowerCase()}">${escapeHtml(text)}</span>`;
+function renderHeader() {
+  $('journey-day-badge').textContent = `Day ${journeyDayCount()}`;
+  $('journey-subtitle').textContent = `${formatDate(JOURNEY_START)} through ${formatDate(todayString)}`;
 }
 
-function updateMealPreview() {
-  $('selected-meal-preview').innerHTML = `<span>Selected category:</span>${mealBadge($('meal-type').value)}`;
-}
-
-function renderJourneyDashboard() {
-  const dayCount = journeyDayCount();
+function renderDashboard() {
   const food = journeyFood();
   const exercise = journeyExercise();
   const latest = latestWeightEntry();
-  const currentWeight = latest ? latest.weight : state.settings.startWeight;
-  const change = state.settings.startWeight - currentWeight;
-  const remaining = Math.max(0, currentWeight - state.settings.goalWeight);
+  const currentWeight = latest?.weight ?? state.settings.startWeight;
   const progress = weightProgress(currentWeight);
-  const totalMinutes = exercise.reduce((sum, item) => sum + item.duration, 0);
-  const averageSession = exercise.length ? totalMinutes / exercise.length : null;
-  const activeDateSet = new Set(exercise.map(item => item.date));
-  const foodDateSet = new Set(food.map(item => item.date));
-  const weeksElapsed = Math.max(1, dayCount / 7);
-  const frequency = exercise.length / weeksElapsed;
-  const unplanned = food.filter(item => item.unplanned).length;
-  const unplannedPercent = food.length ? Math.round((unplanned / food.length) * 100) : 0;
-  const colors = weightColor(currentWeight);
+  const unplanned = food.filter(entry => entry.unplanned).length;
+  const exerciseMinutes = exercise.reduce((sum, entry) => sum + entry.duration, 0);
 
-  $('journey-day-badge').textContent = `Day ${dayCount}`;
-  $('journey-range').textContent = `${formatDate(JOURNEY_START)} through ${formatDate(todayString)}`;
-  $('latest-weight').textContent = currentWeight.toFixed(1);
-  $('latest-weight-detail').textContent = latest ? `${formatDate(latest.date, false)} · ${latest.period}` : 'Starting baseline';
-  $('goal-gap').textContent = remaining.toFixed(1);
-  $('journey-weight-change').textContent = change.toFixed(1);
-  $('journey-session-count').textContent = exercise.length;
-  $('journey-exercise-minutes').textContent = totalMinutes;
-  $('active-days').textContent = activeDateSet.size;
-  $('active-days-detail').textContent = `of ${dayCount} journey ${dayCount === 1 ? 'day' : 'days'}`;
-  $('average-session').textContent = averageSession === null ? '—' : Math.round(averageSession);
-  $('weekly-frequency').textContent = frequency.toFixed(1);
+  $('dashboard-current-weight').textContent = currentWeight.toFixed(1);
+  $('dashboard-weight-context').textContent = latest
+    ? `${formatDate(latest.date)} · ${(currentWeight - state.settings.startWeight).toFixed(1)} lb from start`
+    : 'Starting baseline';
+  $('dashboard-progress-percent').textContent = `${Math.round(progress)}%`;
+  $('dashboard-progress-fill').style.width = `${progress}%`;
+  $('dashboard-progress-marker').style.left = `${Math.max(1, Math.min(99, progress))}%`;
+  $('dashboard-start-label').textContent = `${state.settings.startWeight} lb start`;
+  $('dashboard-current-label').textContent = `${currentWeight.toFixed(1)} lb now`;
+  $('dashboard-goal-label').textContent = `${state.settings.goalWeight} lb goal`;
 
-  $('latest-weight-card').style.background = colors.soft;
-  $('latest-weight-card').style.borderColor = colors.border;
-  $('latest-weight').style.color = colors.solid;
+  $('dashboard-food-total').textContent = food.length;
+  $('dashboard-unplanned-total').textContent = unplanned;
+  $('dashboard-unplanned-rate').textContent = `${food.length ? Math.round((unplanned / food.length) * 100) : 0}% of food entries`;
+  $('dashboard-exercise-total').textContent = exercise.length;
+  $('dashboard-exercise-time').textContent = `${exerciseMinutes.toLocaleString()} total minutes`;
 
-  $('progress-percent').textContent = `${Math.round(progress * 100)}%`;
-  $('progress-bar').style.width = `${progress * 100}%`;
-  $('progress-description').textContent = `${state.settings.startWeight.toFixed(1)} lb start · ${currentWeight.toFixed(1)} lb latest · ${state.settings.goalWeight.toFixed(1)} lb goal`;
-  $('goal-scale-label').textContent = `${state.settings.goalWeight.toFixed(0)} lb · Goal`;
-  $('start-scale-label').textContent = `${state.settings.startWeight.toFixed(0)} lb · Start`;
-  $('midpoint-scale-label').textContent = `${((state.settings.startWeight + state.settings.goalWeight) / 2).toFixed(0)} lb`;
-  $('weight-position').style.left = `${(1 - progress) * 100}%`;
-
-  const activityData = EXERCISE_TYPES.map(type => {
-    const sessions = exercise.filter(item => item.exerciseType === type);
-    return {
-      type,
-      sessions: sessions.length,
-      minutes: sessions.reduce((sum, item) => sum + item.duration, 0)
-    };
-  });
-
-  const topActivity = [...activityData].sort((a, b) => b.minutes - a.minutes || b.sessions - a.sessions)[0];
-  $('top-activity').textContent = topActivity?.minutes ? topActivity.type : '—';
-  $('top-activity-detail').textContent = topActivity?.minutes
-    ? `${topActivity.minutes} min · ${topActivity.sessions} ${topActivity.sessions === 1 ? 'session' : 'sessions'}`
-    : 'No sessions';
-
-  $('exercise-summary-text').textContent = exercise.length
-    ? `${exercise.length} exercise ${exercise.length === 1 ? 'session has' : 'sessions have'} been recorded across ${activeDateSet.size} active ${activeDateSet.size === 1 ? 'day' : 'days'}, totaling ${totalMinutes} minutes.`
-    : 'No exercise has been recorded yet.';
-
-  const maxMinutes = Math.max(1, ...activityData.map(item => item.minutes));
-  $('activity-breakdown').innerHTML = activityData.map(item => {
-    const width = item.minutes ? Math.max(4, (item.minutes / maxMinutes) * 100) : 0;
-    return `
-      <div class="activity-row">
-        <div class="activity-label">
-          <strong>${escapeHtml(item.type)}</strong>
-          <span class="muted">${item.minutes} min · ${item.sessions} ${item.sessions === 1 ? 'session' : 'sessions'}</span>
-        </div>
-        <div class="activity-track"><span class="activity-fill" style="width:${width}%;opacity:${item.minutes ? 1 : 0}"></span></div>
-      </div>`;
-  }).join('');
-
-  const mealCounts = Object.fromEntries(MEAL_TYPES.map(meal => [meal, food.filter(item => item.meal === meal).length]));
-  $('journey-food-count').textContent = food.length;
-  $('journey-unplanned-count').textContent = unplanned;
-  $('unplanned-rate').textContent = `${unplannedPercent}% of entries`;
-  $('food-days-count').textContent = `${foodDateSet.size} ${foodDateSet.size === 1 ? 'day' : 'days'} logged`;
-  $('meal-mix').innerHTML = MEAL_TYPES.map(meal => mealBadge(meal, mealCounts[meal])).join('');
-
-  if (!latest && exercise.length === 0 && food.length === 0) {
-    $('journey-summary').innerHTML = '<strong>Your Project 200 journey is ready to begin.</strong><span>Add your first weigh-in, meal, or exercise session.</span>';
-  } else if (progress >= 1) {
-    $('journey-summary').innerHTML = '<strong>You have reached your 200-pound goal.</strong><span>Continue tracking exercise and weight maintenance from here.</span>';
-  } else {
-    $('journey-summary').innerHTML = `<strong>Your latest weight is ${currentWeight.toFixed(1)} lb, with ${remaining.toFixed(1)} lb remaining to goal.</strong><span>You have recorded ${exercise.length} exercise ${exercise.length === 1 ? 'session' : 'sessions'} totaling ${totalMinutes} minutes since August 1.</span>`;
-  }
+  renderJapanFund();
 }
 
 function renderJapanFund() {
   const balance = fundBalance();
   const goal = state.settings.fundGoalAmount;
   const remaining = Math.max(0, goal - balance);
-  const progress = goal > 0 ? Math.max(0, Math.min(1, balance / goal)) : 0;
+  const percent = goal > 0 ? Math.max(0, Math.min(100, (balance / goal) * 100)) : 0;
   const currentMonth = monthKey();
-  const startMonth = monthKey(state.settings.fundContributionStart);
+  const thisMonth = fundNetForMonth(currentMonth);
+  const contributionStartMonth = monthKey(state.settings.fundContributionStart);
   const targetMonth = monthKey(state.settings.fundTargetDate);
-  const monthlyNet = fundNetForMonth(currentMonth);
-  const monthlySaved = Math.max(0, monthlyNet);
-  const monthlyRemaining = Math.max(0, state.settings.fundMonthlyTarget - monthlyNet);
+  const reminderActive = currentMonth >= contributionStartMonth && currentMonth <= targetMonth && thisMonth < state.settings.fundMonthlyTarget;
+  const due = Math.max(0, state.settings.fundMonthlyTarget - thisMonth);
 
-  $('fund-progress-percent').textContent = `${Math.round(progress * 100)}%`;
-  $('fund-plan-description').textContent = `${formatCurrency(state.settings.fundStartingBalance)} starting balance · ${formatCurrency(state.settings.fundMonthlyTarget)} monthly · ${formatCurrency(goal)} goal`;
   $('fund-balance').textContent = formatCurrency(balance);
-  $('fund-balance-detail').textContent = `of ${formatCurrency(goal)} goal`;
+  $('fund-progress-percent').textContent = `${Math.round(percent)}%`;
+  $('fund-progress-bar').style.width = `${percent}%`;
   $('fund-remaining').textContent = formatCurrency(remaining);
-  $('fund-monthly-saved').textContent = formatCurrency(monthlySaved);
-  $('fund-monthly-detail').textContent = `of ${formatCurrency(state.settings.fundMonthlyTarget)} target`;
-  $('fund-progress-bar').style.width = `${progress * 100}%`;
-  $('fund-start-label').textContent = `${formatCurrency(state.settings.fundStartingBalance)} start`;
-  $('fund-goal-label').textContent = `${formatCurrency(goal)} goal`;
-  $('fund-entry-balance').textContent = `Current balance: ${formatCurrency(balance)}`;
-  $('fund-entry-goal-detail').textContent = balance >= goal
-    ? `The ${formatCurrency(goal)} trip-fund goal has been reached.`
-    : `${formatCurrency(remaining)} remaining toward the ${formatCurrency(goal)} goal.`;
+  $('fund-monthly-saved').textContent = formatCurrency(thisMonth);
+  $('fund-plan-description').textContent = `${formatCurrency(state.settings.fundMonthlyTarget)} per month toward a ${formatCurrency(goal)} trip`;
 
-  const reminder = $('fund-reminder');
-  reminder.classList.add('hidden');
-
-  if (balance >= goal) {
-    $('fund-next-contribution').textContent = `Goal reached · target ${formatDate(state.settings.fundTargetDate, false)}`;
-  } else if (currentMonth < startMonth) {
-    $('fund-next-contribution').textContent = `First contribution ${formatDate(state.settings.fundContributionStart, false)}`;
-  } else if (currentMonth > targetMonth) {
-    $('fund-next-contribution').textContent = `Target date passed · ${formatDate(state.settings.fundTargetDate, false)}`;
-  } else if (monthlyRemaining > 0) {
-    $('fund-next-contribution').textContent = `${formatCurrency(monthlyRemaining)} remaining this month`;
-    $('fund-reminder-title').textContent = 'Japan fund contribution due';
-    $('fund-reminder-text').textContent = `Record ${formatCurrency(monthlyRemaining)} more for ${parseLocalDate(`${currentMonth}-01`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}.`;
-    reminder.classList.remove('hidden');
-  } else {
-    const nextMonth = addMonths(currentMonth, 1);
-    $('fund-next-contribution').textContent = nextMonth <= targetMonth
-      ? `Next ${formatCurrency(state.settings.fundMonthlyTarget)} contribution: ${formatDate(`${nextMonth}-01`, false)}`
-      : `Monthly plan complete through ${formatDate(state.settings.fundTargetDate, false)}`;
+  $('fund-reminder').classList.toggle('hidden', !reminderActive);
+  if (reminderActive) {
+    $('fund-reminder-title').textContent = `${parseLocalDate(`${currentMonth}-01`).toLocaleDateString(undefined, { month: 'long' })} contribution due`;
+    $('fund-reminder-text').textContent = `${formatCurrency(due)} remains for this month’s target.`;
   }
 
-  const entries = [...state.japanFund].sort((a, b) => {
-    if (a.date !== b.date) return b.date.localeCompare(a.date);
-    return b.createdAt - a.createdAt;
-  });
-  $('fund-history-empty').hidden = entries.length > 0;
-  $('fund-history').innerHTML = entries.map(entry => {
-    const signed = fundSignedAmount(entry);
-    const label = entry.type === 'withdrawal' ? 'Withdrawal' : 'Deposit';
-    return `
-      <article class="history-card fund-history-card">
-        <div class="history-main">
-          <div class="history-title"><span class="badge">${label}</span><strong class="fund-amount ${signed < 0 ? 'negative' : 'positive'}">${signed < 0 ? '−' : '+'}${formatCurrency(Math.abs(signed))}</strong></div>
-          <div class="history-meta"><span class="muted">${formatDate(entry.date)}</span></div>
-          ${entry.note ? `<p class="history-note">${escapeHtml(entry.note)}</p>` : ''}
-        </div>
-        <button type="button" class="remove-button fund-remove-button" data-id="${entry.id}">Remove</button>
-      </article>`;
-  }).join('');
-
-  document.querySelectorAll('.fund-remove-button').forEach(button => {
-    button.addEventListener('click', async () => {
-      state.japanFund = state.japanFund.filter(item => item.id !== button.dataset.id);
-      await commitState($('fund-entry-message'), 'Fund activity removed.');
-    });
-  });
+  const history = [...state.japanFund].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt).slice(0, 6);
+  $('fund-history').innerHTML = history.length
+    ? history.map(entry => {
+        const signed = fundSignedAmount(entry);
+        return `<div class="compact-row">
+          <div class="compact-row-main">
+            <strong class="${signed >= 0 ? 'positive' : 'negative'}">${signed >= 0 ? '+' : '−'}${formatCurrency(Math.abs(signed))}</strong>
+            <span class="compact-row-meta">${formatDate(entry.date, false)}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</span>
+          </div>
+          <button class="remove-button" type="button" data-remove-type="fund" data-remove-id="${escapeHtml(entry.id)}">Remove</button>
+        </div>`;
+      }).join('')
+    : '<p class="muted">No deposits or trip purchases recorded yet.</p>';
 }
 
-function renderDailyLog() {
-  const date = $('review-date').value;
-  const entries = [
-    ...state.food.filter(item => item.date === date).map(item => ({ ...item, recordType: 'Food' })),
-    ...state.exercise.filter(item => item.date === date).map(item => ({ ...item, recordType: 'Exercise' })),
-    ...state.weights.filter(item => item.date === date).map(item => ({ ...item, recordType: 'Weight' })),
-    ...state.japanFund.filter(item => item.date === date).map(item => ({ ...item, recordType: 'Fund' }))
-  ].sort((a, b) => b.createdAt - a.createdAt);
+function renderFoodWeek() {
+  const dates = weekDates(foodWeekStart);
+  const entries = state.food.filter(entry => dates.includes(entry.date));
+  const unplanned = entries.filter(entry => entry.unplanned).length;
+  $('food-week-label').textContent = formatWeekRange(foodWeekStart);
+  $('food-week-total').textContent = entries.length;
+  $('food-week-unplanned').textContent = unplanned;
 
-  $('log-empty').hidden = entries.length > 0;
-  $('daily-log').innerHTML = entries.map(entry => {
-    if (entry.recordType === 'Food') {
-      const colorMap = { Breakfast: '#8b5e3c', Lunch: '#82bce7', Dinner: '#dc83ad', Snack: '#d94a4a', Drink: '#1f4e79' };
-      return `
-        <article class="history-card food" style="border-left-color:${colorMap[entry.meal]}">
-          <div class="history-main">
-            <div class="history-title">${mealBadge(entry.meal)}<strong>${escapeHtml(entry.name)}</strong></div>
-            <div class="history-meta"><span class="badge">${escapeHtml(entry.portion)}</span>${entry.unplanned ? '<span class="badge">Unplanned</span>' : ''}</div>
-            ${entry.note ? `<p class="history-note">${escapeHtml(entry.note)}</p>` : ''}
-            <p class="history-note">${escapeHtml(entry.time)}</p>
-          </div>
-          <button type="button" class="remove-button" data-kind="food" data-id="${entry.id}">Remove</button>
-        </article>`;
-    }
+  $('food-week-grid').innerHTML = dates.map(date => {
+    const dateEntries = entries
+      .filter(entry => entry.date === date)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    const parsed = parseLocalDate(date);
+    const entriesHtml = dateEntries.length
+      ? dateEntries.map(entry => `<article class="food-mini-entry ${mealClass(entry.meal)} ${entry.unplanned ? 'unplanned' : ''}">
+          <strong>${escapeHtml(entry.name)}</strong>
+          <span class="mini-meta">${escapeHtml(entry.meal)} · ${escapeHtml(entry.portion)}${entry.unplanned ? ' · Unplanned' : ''}</span>
+          <button class="mini-remove" type="button" aria-label="Remove ${escapeHtml(entry.name)}" data-remove-type="food" data-remove-id="${escapeHtml(entry.id)}">×</button>
+        </article>`).join('')
+      : '<p class="day-empty">No entries</p>';
 
-    if (entry.recordType === 'Exercise') {
-      return `
-        <article class="history-card">
-          <div class="history-main">
-            <div class="history-title"><span class="badge">Exercise</span><strong>${escapeHtml(entry.exerciseType)}</strong></div>
-            <div class="history-meta"><span class="badge">${entry.duration} min</span><span class="badge">${escapeHtml(entry.period)}</span></div>
-            ${entry.note ? `<p class="history-note">${escapeHtml(entry.note)}</p>` : ''}
-          </div>
-          <button type="button" class="remove-button" data-kind="exercise" data-id="${entry.id}">Remove</button>
-        </article>`;
-    }
-
-    if (entry.recordType === 'Fund') {
-      const signed = fundSignedAmount(entry);
-      return `
-        <article class="history-card">
-          <div class="history-main">
-            <div class="history-title"><span class="badge">Japan fund</span><strong class="fund-amount ${signed < 0 ? 'negative' : 'positive'}">${signed < 0 ? '−' : '+'}${formatCurrency(Math.abs(signed))}</strong></div>
-            <div class="history-meta"><span class="badge">${entry.type === 'withdrawal' ? 'Withdrawal' : 'Deposit'}</span></div>
-            ${entry.note ? `<p class="history-note">${escapeHtml(entry.note)}</p>` : ''}
-          </div>
-          <button type="button" class="remove-button" data-kind="fund" data-id="${entry.id}">Remove</button>
-        </article>`;
-    }
-
-    const colors = weightColor(entry.weight);
-    return `
-      <article class="history-card" style="background:${colors.soft};border-color:${colors.border}">
-        <div class="weight-history-main">
-          <span class="weight-color-strip" style="background:${colors.solid}"></span>
-          <div>
-            <strong style="color:${colors.solid}">${entry.weight.toFixed(1)} lb</strong>
-            <p class="history-note">${escapeHtml(entry.period)} weigh-in</p>
-          </div>
-        </div>
-        <button type="button" class="remove-button" data-kind="weight" data-id="${entry.id}">Remove</button>
-      </article>`;
+    return `<section class="day-card ${date === todayString ? 'today' : ''}">
+      <div class="day-card-header">
+        <div><div class="day-name">${parsed.toLocaleDateString(undefined, { weekday: 'short' })}</div><div class="day-number">${parsed.getDate()}</div></div>
+        <span class="day-count">${dateEntries.length || ''}</span>
+      </div>
+      ${entriesHtml}
+    </section>`;
   }).join('');
-
-  document.querySelectorAll('#daily-log .remove-button').forEach(button => {
-    button.addEventListener('click', async () => {
-      const { kind, id } = button.dataset;
-      if (kind === 'food') state.food = state.food.filter(item => item.id !== id);
-      if (kind === 'exercise') state.exercise = state.exercise.filter(item => item.id !== id);
-      if (kind === 'weight') state.weights = state.weights.filter(item => item.id !== id);
-      if (kind === 'fund') state.japanFund = state.japanFund.filter(item => item.id !== id);
-      await commitState();
-    });
-  });
 }
 
-function updateAll() {
-  renderJourneyDashboard();
-  renderJapanFund();
-  renderDailyLog();
+function renderWeightSection() {
+  const entries = sortedWeights();
+  const latest = entries.at(-1);
+  const currentWeight = latest?.weight ?? state.settings.startWeight;
+  const change = currentWeight - state.settings.startWeight;
+  const gap = currentWeight - state.settings.goalWeight;
+
+  $('weight-latest-stat').textContent = currentWeight.toFixed(1);
+  $('weight-change-stat').textContent = `${change > 0 ? '+' : ''}${change.toFixed(1)}`;
+  $('weight-goal-gap-stat').textContent = Math.max(0, gap).toFixed(1);
+  $('weight-chart-range').textContent = `${formatDate(JOURNEY_START)} through ${formatDate(todayString)}`;
+  $('weight-chart-empty').classList.toggle('hidden', entries.length > 0);
+  $('weight-chart-wrap').classList.toggle('hidden', entries.length === 0);
+  $('weight-history-details').classList.toggle('hidden', entries.length === 0);
+
+  if (!entries.length) {
+    $('weight-chart').innerHTML = '';
+    $('weight-history').innerHTML = '';
+    return;
+  }
+
+  renderWeightChart(entries);
+  $('weight-history').innerHTML = [...entries].reverse().map(entry => `<div class="compact-row">
+    <div class="compact-row-main">
+      <strong>${entry.weight.toFixed(1)} lb</strong>
+      <span class="compact-row-meta">${formatDate(entry.date)} · ${escapeHtml(entry.period)}</span>
+    </div>
+    <button class="remove-button" type="button" data-remove-type="weight" data-remove-id="${escapeHtml(entry.id)}">Remove</button>
+  </div>`).join('');
+}
+
+function renderWeightChart(entries) {
+  const svg = $('weight-chart');
+  const width = 800;
+  const height = 320;
+  const margin = { top: 28, right: 30, bottom: 48, left: 58 };
+  const chartWidth = width - margin.left - margin.right;
+  const chartHeight = height - margin.top - margin.bottom;
+
+  const displayEntries = entries.map(entry => ({ ...entry, timestamp: parseLocalDate(entry.date).getTime() }));
+  const minTime = Math.min(parseLocalDate(JOURNEY_START).getTime(), ...displayEntries.map(entry => entry.timestamp));
+  const maxTimeRaw = Math.max(...displayEntries.map(entry => entry.timestamp));
+  const maxTime = maxTimeRaw === minTime ? minTime + 86400000 : maxTimeRaw;
+  const values = [...displayEntries.map(entry => entry.weight), state.settings.startWeight, state.settings.goalWeight];
+  const minWeight = Math.floor(Math.min(...values) - 2);
+  const maxWeight = Math.ceil(Math.max(...values) + 2);
+  const weightRange = Math.max(1, maxWeight - minWeight);
+
+  const x = timestamp => margin.left + ((timestamp - minTime) / (maxTime - minTime)) * chartWidth;
+  const y = weight => margin.top + ((maxWeight - weight) / weightRange) * chartHeight;
+  const points = displayEntries.map(entry => `${x(entry.timestamp).toFixed(1)},${y(entry.weight).toFixed(1)}`).join(' ');
+  const areaPoints = `${x(displayEntries[0].timestamp).toFixed(1)},${(margin.top + chartHeight).toFixed(1)} ${points} ${x(displayEntries.at(-1).timestamp).toFixed(1)},${(margin.top + chartHeight).toFixed(1)}`;
+
+  const gridTicks = 4;
+  const grid = Array.from({ length: gridTicks + 1 }, (_, index) => {
+    const weight = maxWeight - (weightRange * index / gridTicks);
+    const py = y(weight);
+    return `<line class="chart-grid-line" x1="${margin.left}" y1="${py}" x2="${width - margin.right}" y2="${py}"></line>
+      <text class="chart-axis-label" x="${margin.left - 10}" y="${py + 4}" text-anchor="end">${weight.toFixed(0)}</text>`;
+  }).join('');
+
+  const dateLabels = [
+    { date: new Date(minTime), px: margin.left, anchor: 'start' },
+    { date: new Date(maxTime), px: width - margin.right, anchor: 'end' }
+  ].map(item => `<text class="chart-axis-label" x="${item.px}" y="${height - 16}" text-anchor="${item.anchor}">${item.date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</text>`).join('');
+
+  const circles = displayEntries.map((entry, index) => `<circle class="chart-point ${index === displayEntries.length - 1 ? 'latest' : ''}" cx="${x(entry.timestamp)}" cy="${y(entry.weight)}" r="6">
+    <title>${formatDate(entry.date)}: ${entry.weight.toFixed(1)} lb</title>
+  </circle>`).join('');
+
+  svg.innerHTML = `${grid}
+    <line class="chart-goal-line" x1="${margin.left}" y1="${y(state.settings.goalWeight)}" x2="${width - margin.right}" y2="${y(state.settings.goalWeight)}"></line>
+    <text class="chart-axis-label" x="${width - margin.right}" y="${y(state.settings.goalWeight) - 8}" text-anchor="end">Goal ${state.settings.goalWeight} lb</text>
+    <polygon class="chart-area" points="${areaPoints}"></polygon>
+    <polyline class="chart-line" points="${points}"></polyline>
+    ${circles}
+    ${dateLabels}`;
+}
+
+function renderExerciseWeek() {
+  const dates = weekDates(exerciseWeekStart);
+  const entries = state.exercise.filter(entry => dates.includes(entry.date));
+  const totals = dates.map(date => entries.filter(entry => entry.date === date).reduce((sum, entry) => sum + entry.duration, 0));
+  const maxMinutes = Math.max(1, ...totals);
+  const totalMinutes = totals.reduce((sum, value) => sum + value, 0);
+
+  $('exercise-week-label').textContent = formatWeekRange(exerciseWeekStart);
+  $('exercise-week-sessions').textContent = entries.length;
+  $('exercise-week-minutes').textContent = totalMinutes;
+  $('exercise-week-chart').innerHTML = dates.map((date, index) => {
+    const parsed = parseLocalDate(date);
+    const minutes = totals[index];
+    const barHeight = minutes ? Math.max(5, (minutes / maxMinutes) * 100) : 2;
+    return `<div class="exercise-day-column ${date === todayString ? 'today' : ''}">
+      <div class="exercise-bar-space"><div class="exercise-bar" style="height:${barHeight}%" title="${minutes} minutes"></div></div>
+      <strong class="exercise-minutes">${minutes ? `${minutes}m` : '—'}</strong>
+      <span class="exercise-day-label">${parsed.toLocaleDateString(undefined, { weekday: 'short' })}<br>${parsed.getDate()}</span>
+    </div>`;
+  }).join('');
+
+  const sorted = [...entries].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+  $('exercise-week-list').innerHTML = sorted.length
+    ? sorted.map(entry => `<div class="compact-row">
+        <div class="compact-row-main">
+          <strong>${escapeHtml(entry.exerciseType)} · ${entry.duration} min</strong>
+          <span class="compact-row-meta">${formatDate(entry.date, false)} · ${escapeHtml(entry.period)}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</span>
+        </div>
+        <button class="remove-button" type="button" data-remove-type="exercise" data-remove-id="${escapeHtml(entry.id)}">Remove</button>
+      </div>`).join('')
+    : '<p class="muted">No exercise recorded this week.</p>';
+}
+
+function renderExerciseProgram() {
+  const entries = journeyExercise();
+  const totalMinutes = entries.reduce((sum, entry) => sum + entry.duration, 0);
+  const activeDays = new Set(entries.map(entry => entry.date)).size;
+  const average = entries.length ? Math.round(totalMinutes / entries.length) : 0;
+  $('exercise-program-count').textContent = entries.length;
+  $('exercise-program-minutes').textContent = totalMinutes.toLocaleString();
+  $('exercise-program-days').textContent = activeDays;
+  $('exercise-program-average').textContent = average;
+
+  const typeTotals = EXERCISE_TYPES.map(type => {
+    const typeEntries = entries.filter(entry => entry.exerciseType === type);
+    return {
+      type,
+      sessions: typeEntries.length,
+      minutes: typeEntries.reduce((sum, entry) => sum + entry.duration, 0)
+    };
+  }).filter(item => item.sessions > 0).sort((a, b) => b.minutes - a.minutes);
+  const max = Math.max(1, ...typeTotals.map(item => item.minutes));
+  $('exercise-type-breakdown').innerHTML = typeTotals.length
+    ? typeTotals.map(item => `<div class="breakdown-row">
+        <div class="breakdown-label"><strong>${escapeHtml(item.type)}</strong><span>${item.sessions} sessions · ${item.minutes} min</span></div>
+        <div class="breakdown-track"><div class="breakdown-fill" style="width:${(item.minutes / max) * 100}%"></div></div>
+      </div>`).join('')
+    : '<p class="muted">Activity breakdown will appear after your first session.</p>';
+}
+
+function renderAll() {
+  renderHeader();
+  renderDashboard();
+  renderFoodWeek();
+  renderWeightSection();
+  renderExerciseWeek();
+  renderExerciseProgram();
 }
 
 async function commitState(messageElement = null, message = '') {
   try {
     await saveState();
-    updateAll();
-    if (messageElement) messageElement.textContent = message;
+    renderAll();
+    if (messageElement) {
+      messageElement.textContent = message;
+      window.setTimeout(() => { if (messageElement.textContent === message) messageElement.textContent = ''; }, 3000);
+    }
   } catch (error) {
     console.error(error);
-    if (messageElement) messageElement.textContent = 'The entry could not be saved on this device.';
+    if (messageElement) messageElement.textContent = 'Could not save. Please try again.';
   }
 }
 
 async function addFood() {
-  const input = $('food-name');
-  const name = input.value.trim();
+  const name = $('food-name').value.trim();
   if (!name) {
-    $('food-message').textContent = 'Enter the food or drink first.';
-    input.focus();
+    $('food-message').textContent = 'Enter the food or drink.';
+    $('food-name').focus();
     return;
   }
-
+  const date = $('food-date').value || todayString;
   state.food.push({
     id: makeId(),
     createdAt: Date.now(),
-    date: $('food-date').value || todayString,
+    date,
     time: currentTime(),
     name,
     meal: $('meal-type').value,
     portion: $('portion-size').value,
     note: $('food-note').value.trim(),
-    unplanned: $('unplanned-food').checked
+    unplanned: $('food-unplanned').checked
   });
-
-  $('review-date').value = $('food-date').value;
-  input.value = '';
+  foodWeekStart = startOfWeek(date);
+  $('food-name').value = '';
   $('food-note').value = '';
-  $('unplanned-food').checked = false;
-  $('portion-size').value = 'Standard';
+  $('food-unplanned').checked = false;
   await commitState($('food-message'), 'Food entry saved.');
-}
-
-async function addExercise() {
-  const input = $('exercise-duration');
-  const duration = Number(input.value);
-  if (!Number.isFinite(duration) || duration < 1) {
-    $('exercise-message').textContent = 'Enter the approximate number of minutes.';
-    input.focus();
-    return;
-  }
-
-  state.exercise.push({
-    id: makeId(),
-    createdAt: Date.now(),
-    date: $('exercise-date').value || todayString,
-    exerciseType: $('exercise-type').value,
-    duration,
-    period: $('exercise-period').value,
-    note: $('exercise-note').value.trim()
-  });
-
-  $('review-date').value = $('exercise-date').value;
-  input.value = '';
-  $('exercise-note').value = '';
-  await commitState($('exercise-message'), 'Exercise entry saved.');
 }
 
 async function addWeight() {
@@ -622,7 +584,6 @@ async function addWeight() {
     $('weight-value').focus();
     return;
   }
-
   state.weights.push({
     id: makeId(),
     createdAt: Date.now(),
@@ -630,10 +591,31 @@ async function addWeight() {
     weight,
     period: $('weight-period').value
   });
-
-  $('review-date').value = $('weight-date').value;
   $('weight-value').value = '';
   await commitState($('weight-message'), 'Weigh-in saved.');
+}
+
+async function addExercise() {
+  const duration = Number($('exercise-duration').value);
+  if (!Number.isFinite(duration) || duration < 1 || duration > 600) {
+    $('exercise-message').textContent = 'Enter exercise minutes between 1 and 600.';
+    $('exercise-duration').focus();
+    return;
+  }
+  const date = $('exercise-date').value || todayString;
+  state.exercise.push({
+    id: makeId(),
+    createdAt: Date.now(),
+    date,
+    exerciseType: $('exercise-type').value,
+    duration,
+    period: $('exercise-period').value,
+    note: $('exercise-note').value.trim()
+  });
+  exerciseWeekStart = startOfWeek(date);
+  $('exercise-duration').value = '';
+  $('exercise-note').value = '';
+  await commitState($('exercise-message'), 'Exercise saved.');
 }
 
 async function addFundEntry() {
@@ -643,7 +625,6 @@ async function addFundEntry() {
     $('fund-entry-amount').focus();
     return;
   }
-
   state.japanFund.push({
     id: makeId(),
     createdAt: Date.now(),
@@ -652,11 +633,29 @@ async function addFundEntry() {
     amount,
     note: $('fund-entry-note').value.trim()
   });
-
-  $('review-date').value = $('fund-entry-date').value;
   $('fund-entry-amount').value = '';
   $('fund-entry-note').value = '';
-  await commitState($('fund-entry-message'), 'Japan fund activity saved.');
+  await commitState($('fund-entry-message'), 'Cash activity saved.');
+}
+
+async function removeEntry(type, id) {
+  const collectionMap = { food: 'food', weight: 'weights', exercise: 'exercise', fund: 'japanFund' };
+  const collection = collectionMap[type];
+  if (!collection) return;
+  state[collection] = state[collection].filter(entry => entry.id !== id);
+  await commitState();
+}
+
+async function saveWeightSettings() {
+  const start = Number($('start-weight').value);
+  const goal = Number($('goal-weight').value);
+  if (!Number.isFinite(start) || !Number.isFinite(goal) || start <= goal) {
+    $('weight-settings-message').textContent = 'Starting weight must be greater than goal weight.';
+    return;
+  }
+  state.settings.startWeight = start;
+  state.settings.goalWeight = goal;
+  await commitState($('weight-settings-message'), 'Weight goal saved.');
 }
 
 async function saveFundSettings() {
@@ -665,34 +664,16 @@ async function saveFundSettings() {
   const monthlyTarget = Number($('fund-monthly-target').value);
   const contributionStart = $('fund-contribution-start').value;
   const targetDate = $('fund-target-date').value;
-
   if (!Number.isFinite(startingBalance) || startingBalance < 0 || !Number.isFinite(goalAmount) || goalAmount <= 0 || !Number.isFinite(monthlyTarget) || monthlyTarget <= 0) {
-    $('fund-settings-message').textContent = 'Enter valid nonnegative starting cash and positive goal and monthly amounts.';
+    $('fund-settings-message').textContent = 'Enter valid fund amounts.';
     return;
   }
   if (!contributionStart || !targetDate || contributionStart > targetDate) {
-    $('fund-settings-message').textContent = 'The first reminder date must be on or before the target date.';
+    $('fund-settings-message').textContent = 'Check the reminder and target dates.';
     return;
   }
-
-  state.settings.fundStartingBalance = startingBalance;
-  state.settings.fundGoalAmount = goalAmount;
-  state.settings.fundMonthlyTarget = monthlyTarget;
-  state.settings.fundContributionStart = contributionStart;
-  state.settings.fundTargetDate = targetDate;
-  await commitState($('fund-settings-message'), 'Japan fund settings saved.');
-}
-
-async function saveSettings() {
-  const start = Number($('start-weight').value);
-  const goal = Number($('goal-weight').value);
-  if (!Number.isFinite(start) || !Number.isFinite(goal) || start <= goal) {
-    $('settings-message').textContent = 'Starting weight must be greater than goal weight.';
-    return;
-  }
-  state.settings.startWeight = start;
-  state.settings.goalWeight = goal;
-  await commitState($('settings-message'), 'Goal settings saved.');
+  Object.assign(state.settings, { fundStartingBalance: startingBalance, fundGoalAmount: goalAmount, fundMonthlyTarget: monthlyTarget, fundContributionStart: contributionStart, fundTargetDate: targetDate });
+  await commitState($('fund-settings-message'), 'Fund plan saved.');
 }
 
 function downloadFile(filename, content, type) {
@@ -712,34 +693,23 @@ function exportCsv() {
   state.food.forEach(entry => rows.push([entry.date, entry.time, 'Food', entry.name, entry.meal, entry.portion, '', entry.unplanned ? 'Yes' : 'No', '', entry.note]));
   state.exercise.forEach(entry => rows.push([entry.date, '', 'Exercise', entry.exerciseType, entry.exerciseType, `${entry.duration} minutes`, entry.period, '', '', entry.note]));
   state.weights.forEach(entry => rows.push([entry.date, '', 'Weight', '', '', '', entry.period, '', entry.weight, '']));
-  state.japanFund.forEach(entry => rows.push([entry.date, '', 'Japan Fund', entry.type === 'withdrawal' ? 'Withdrawal' : 'Deposit', 'Japan 2027', fundSignedAmount(entry).toFixed(2), '', '', '', entry.note]));
+  state.japanFund.forEach(entry => rows.push([entry.date, '', 'Japan Fund', entry.type === 'withdrawal' ? 'Trip purchase' : 'Deposit', 'Japan 2027', fundSignedAmount(entry).toFixed(2), '', '', '', entry.note]));
   const csv = rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n');
   downloadFile(`project-200-data-${todayString}.csv`, csv, 'text/csv;charset=utf-8');
 }
 
-async function clearSelectedDay() {
-  const selected = $('review-date').value;
-  if (!window.confirm(`Remove all entries for ${formatDate(selected)}?`)) return;
-  state.food = state.food.filter(entry => entry.date !== selected);
-  state.exercise = state.exercise.filter(entry => entry.date !== selected);
-  state.weights = state.weights.filter(entry => entry.date !== selected);
-  state.japanFund = state.japanFund.filter(entry => entry.date !== selected);
-  await commitState($('data-message'), 'Selected day cleared.');
+async function importBackup(file) {
+  const text = await file.text();
+  state = normalizeState(JSON.parse(text));
+  populateSettingsFields();
+  await commitState($('data-message'), 'Backup imported successfully.');
 }
 
 async function clearAllData() {
-  if (!window.confirm('Clear every health and Japan fund entry? This cannot be undone unless you have a backup.')) return;
+  if (!window.confirm('Clear every Project 200 entry? This cannot be undone without a backup.')) return;
   state = structuredClone(DEFAULT_STATE);
   populateSettingsFields();
   await commitState($('data-message'), 'All tracked data was cleared.');
-}
-
-async function importBackup(file) {
-  const text = await file.text();
-  const imported = JSON.parse(text);
-  state = normalizeState(imported);
-  populateSettingsFields();
-  await commitState($('data-message'), 'Backup imported successfully.');
 }
 
 function setupInstallFlow() {
@@ -752,7 +722,6 @@ function setupInstallFlow() {
     deferredInstallPrompt = event;
     installButton.classList.remove('hidden');
   });
-
   installButton.addEventListener('click', async () => {
     if (!deferredInstallPrompt) return;
     deferredInstallPrompt.prompt();
@@ -760,42 +729,43 @@ function setupInstallFlow() {
     deferredInstallPrompt = null;
     installButton.classList.add('hidden');
   });
-
-  window.addEventListener('appinstalled', () => {
-    deferredInstallPrompt = null;
-    installButton.classList.add('hidden');
-  });
+  window.addEventListener('appinstalled', () => installButton.classList.add('hidden'));
 }
 
 function bindEvents() {
-  $('show-dashboard').addEventListener('click', () => showScreen('dashboard-screen'));
-  $('show-inputs').addEventListener('click', () => showScreen('input-screen'));
-  $('dashboard-add-entry').addEventListener('click', () => showScreen('input-screen'));
-  $('input-back-dashboard').addEventListener('click', () => showScreen('dashboard-screen'));
-  $('entry-finished').addEventListener('click', () => showScreen('dashboard-screen'));
-
-  document.querySelectorAll('.entry-selector').forEach(button => {
-    button.addEventListener('click', () => showEntryPanel(button.dataset.entryPanel));
-  });
-
+  document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => showTab(button.dataset.tab)));
   $('add-food').addEventListener('click', addFood);
-  $('add-exercise').addEventListener('click', addExercise);
   $('add-weight').addEventListener('click', addWeight);
+  $('add-exercise').addEventListener('click', addExercise);
   $('add-fund-entry').addEventListener('click', addFundEntry);
+  $('save-weight-settings').addEventListener('click', saveWeightSettings);
   $('save-fund-settings').addEventListener('click', saveFundSettings);
-  $('dashboard-add-fund').addEventListener('click', () => openFundEntry());
+
+  $('food-prev-week').addEventListener('click', () => { foodWeekStart = addDays(foodWeekStart, -7); renderFoodWeek(); });
+  $('food-next-week').addEventListener('click', () => { foodWeekStart = addDays(foodWeekStart, 7); renderFoodWeek(); });
+  $('food-current-week').addEventListener('click', () => { foodWeekStart = startOfWeek(); renderFoodWeek(); });
+  $('exercise-prev-week').addEventListener('click', () => { exerciseWeekStart = addDays(exerciseWeekStart, -7); renderExerciseWeek(); });
+  $('exercise-next-week').addEventListener('click', () => { exerciseWeekStart = addDays(exerciseWeekStart, 7); renderExerciseWeek(); });
+  $('exercise-current-week').addEventListener('click', () => { exerciseWeekStart = startOfWeek(); renderExerciseWeek(); });
+
   $('fund-reminder-add').addEventListener('click', () => {
     const due = Math.max(0, state.settings.fundMonthlyTarget - fundNetForMonth(monthKey()));
-    openFundEntry(due || state.settings.fundMonthlyTarget);
+    $('fund-entry-details').open = true;
+    $('fund-entry-type').value = 'deposit';
+    $('fund-entry-date').value = todayString;
+    $('fund-entry-amount').value = (due || state.settings.fundMonthlyTarget).toFixed(2).replace(/\.00$/, '');
+    window.setTimeout(() => $('fund-entry-amount').focus(), 100);
   });
-  $('save-settings').addEventListener('click', saveSettings);
-  $('export-csv').addEventListener('click', exportCsv);
-  $('export-backup').addEventListener('click', () => downloadFile(`project-200-backup-${todayString}.json`, JSON.stringify(state, null, 2), 'application/json'));
-  $('clear-day').addEventListener('click', clearSelectedDay);
-  $('clear-all').addEventListener('click', clearAllData);
-  $('meal-type').addEventListener('change', updateMealPreview);
-  $('review-date').addEventListener('change', renderDailyLog);
 
+  document.body.addEventListener('click', event => {
+    const button = event.target.closest('[data-remove-type][data-remove-id]');
+    if (!button) return;
+    removeEntry(button.dataset.removeType, button.dataset.removeId);
+  });
+
+  $('export-backup').addEventListener('click', () => downloadFile(`project-200-backup-${todayString}.json`, JSON.stringify(state, null, 2), 'application/json'));
+  $('export-csv').addEventListener('click', exportCsv);
+  $('clear-all').addEventListener('click', clearAllData);
   $('import-backup').addEventListener('change', async event => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -803,23 +773,40 @@ function bindEvents() {
       await importBackup(file);
     } catch (error) {
       console.error(error);
-      $('data-message').textContent = 'That file could not be imported as a Project 200 backup.';
+      $('data-message').textContent = 'That file could not be imported.';
     }
     event.target.value = '';
   });
 
   $('food-name').addEventListener('keydown', event => { if (event.key === 'Enter') addFood(); });
-  $('exercise-duration').addEventListener('keydown', event => { if (event.key === 'Enter') addExercise(); });
   $('weight-value').addEventListener('keydown', event => { if (event.key === 'Enter') addWeight(); });
+  $('exercise-duration').addEventListener('keydown', event => { if (event.key === 'Enter') addExercise(); });
   $('fund-entry-amount').addEventListener('keydown', event => { if (event.key === 'Enter') addFundEntry(); });
 }
 
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+  try {
+    const registration = await navigator.serviceWorker.register('./sw.js');
+    registration.update();
+  } catch (error) {
+    console.error('Service worker registration failed:', error);
+  }
+}
+
 async function initialize() {
+  foodWeekStart = startOfWeek();
+  exerciseWeekStart = startOfWeek();
   $('food-date').value = todayString;
-  $('exercise-date').value = todayString;
   $('weight-date').value = todayString;
+  $('exercise-date').value = todayString;
   $('fund-entry-date').value = todayString;
-  $('review-date').value = todayString;
 
   try {
     const saved = await loadState();
@@ -831,17 +818,17 @@ async function initialize() {
   }
 
   populateSettingsFields();
-
   bindEvents();
   setupInstallFlow();
-  showScreen('dashboard-screen');
-  showEntryPanel('food-entry-panel');
-  updateMealPreview();
-  updateAll();
+  renderAll();
 
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js').catch(error => console.error('Service worker registration failed:', error));
-  }
+  let initialTab = 'dashboard';
+  try {
+    const savedTab = localStorage.getItem('project-200-active-tab');
+    if (['dashboard', 'food', 'weight', 'exercise'].includes(savedTab)) initialTab = savedTab;
+  } catch (_) {}
+  showTab(initialTab);
+  registerServiceWorker();
 }
 
 initialize();
