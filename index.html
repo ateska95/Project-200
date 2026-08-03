@@ -1,325 +1,934 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#24483c">
-  <meta name="description" content="Project 200 is a private, offline-friendly fitness and Japan savings tracker.">
-  <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="icon" href="./icons/icon-192.png" sizes="192x192">
-  <link rel="apple-touch-icon" href="./icons/icon-192.png">
-  <link rel="stylesheet" href="./styles.css">
-  <title>Project 200</title>
-</head>
-<body>
-  <noscript>This app requires JavaScript to save and display your entries.</noscript>
+const JOURNEY_START = '2026-08-01';
+const DB_NAME = 'project-200-db';
+const DB_VERSION = 1;
+const STORE_NAME = 'app-state';
+const STATE_KEY = 'current';
+const EXERCISE_TYPES = ['Aikido-Lite', 'Aikido-Intense', 'Jog', 'Gym', 'Other'];
+const MEAL_TYPES = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Drink'];
 
-  <main class="app-shell">
-    <header class="app-header">
-      <div>
-        <p class="eyebrow">Project 200</p>
-        <h1>Build the year. Earn Japan.</h1>
-        <p id="journey-subtitle" class="muted">Journey beginning August 1, 2026</p>
+const DEFAULT_STATE = {
+  version: 4,
+  food: [],
+  exercise: [],
+  weights: [],
+  japanFund: [],
+  settings: {
+    startWeight: 222,
+    goalWeight: 200,
+    fundStartingBalance: 500,
+    fundGoalAmount: 10000,
+    fundMonthlyTarget: 850,
+    fundContributionStart: '2026-09-01',
+    fundTargetDate: '2027-08-01'
+  }
+};
+
+let state = structuredClone(DEFAULT_STATE);
+let deferredInstallPrompt = null;
+let foodWeekStart = '';
+let exerciseWeekStart = '';
+let fundWeekStart = '';
+
+const $ = id => document.getElementById(id);
+
+function localDateString(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+const todayString = localDateString();
+
+function parseLocalDate(value) {
+  const [year, month, day] = String(value).split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function addDays(value, amount) {
+  const date = parseLocalDate(value);
+  date.setDate(date.getDate() + amount);
+  return localDateString(date);
+}
+
+function startOfWeek(value = todayString) {
+  const date = parseLocalDate(value);
+  const mondayOffset = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - mondayOffset);
+  return localDateString(date);
+}
+
+function weekDates(weekStart) {
+  return Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
+}
+
+function formatDate(value, includeYear = true) {
+  return parseLocalDate(value).toLocaleDateString(undefined, includeYear
+    ? { month: 'long', day: 'numeric', year: 'numeric' }
+    : { month: 'short', day: 'numeric' });
+}
+
+function formatWeekRange(weekStart) {
+  const weekEnd = addDays(weekStart, 6);
+  const startDate = parseLocalDate(weekStart);
+  const endDate = parseLocalDate(weekEnd);
+  const sameMonth = startDate.getMonth() === endDate.getMonth() && startDate.getFullYear() === endDate.getFullYear();
+  if (sameMonth) {
+    return `${startDate.toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}–${endDate.getDate()}, ${endDate.getFullYear()}`;
+  }
+  return `${startDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}–${endDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+}
+
+function currentTime() {
+  return new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function makeId() {
+  return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function escapeHtml(value) {
+  const div = document.createElement('div');
+  div.textContent = String(value ?? '');
+  return div.innerHTML;
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: Number(value) % 1 ? 2 : 0,
+    maximumFractionDigits: 2
+  }).format(Number(value) || 0);
+}
+
+function monthKey(value = todayString) {
+  return String(value).slice(0, 7);
+}
+
+function journeyDayCount() {
+  const start = parseLocalDate(JOURNEY_START);
+  const today = parseLocalDate(todayString);
+  return Math.max(1, Math.floor((today - start) / 86400000) + 1);
+}
+
+function withinJourney(entry) {
+  return entry.date >= JOURNEY_START && entry.date <= todayString;
+}
+
+function journeyFood() { return state.food.filter(withinJourney); }
+function journeyExercise() { return state.exercise.filter(withinJourney); }
+function journeyWeights() { return state.weights.filter(withinJourney); }
+
+function fundSignedAmount(entry) {
+  return entry.type === 'withdrawal' ? -entry.amount : entry.amount;
+}
+
+function fundBalance() {
+  return state.settings.fundStartingBalance + state.japanFund.reduce((sum, entry) => sum + fundSignedAmount(entry), 0);
+}
+
+function fundNetForMonth(month) {
+  return state.japanFund
+    .filter(entry => monthKey(entry.date) === month)
+    .reduce((sum, entry) => sum + fundSignedAmount(entry), 0);
+}
+
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function loadState() {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readonly');
+    const request = transaction.objectStore(STORE_NAME).get(STATE_KEY);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => db.close();
+  });
+}
+
+async function saveState() {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    transaction.objectStore(STORE_NAME).put(state, STATE_KEY);
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onerror = () => reject(transaction.error);
+  });
+}
+
+function normalizeState(imported) {
+  const normalized = structuredClone(DEFAULT_STATE);
+  if (!imported || typeof imported !== 'object') return normalized;
+
+  normalized.food = Array.isArray(imported.food)
+    ? imported.food.filter(item => item && typeof item.date === 'string').map(item => ({
+        id: item.id || makeId(),
+        createdAt: Number(item.createdAt) || Date.now(),
+        date: item.date,
+        time: item.time || '',
+        name: String(item.name || 'Food entry'),
+        meal: MEAL_TYPES.includes(item.meal) ? item.meal : 'Snack',
+        portion: ['Small', 'Standard', 'Large', 'Unsure'].includes(item.portion) ? item.portion : 'Standard',
+        note: String(item.note || ''),
+        unplanned: Boolean(item.unplanned)
+      }))
+    : [];
+
+  normalized.exercise = Array.isArray(imported.exercise)
+    ? imported.exercise.filter(item => item && typeof item.date === 'string').map(item => ({
+        id: item.id || makeId(),
+        createdAt: Number(item.createdAt) || Date.now(),
+        date: item.date,
+        exerciseType: EXERCISE_TYPES.includes(item.exerciseType) ? item.exerciseType : 'Other',
+        duration: Math.max(1, Number(item.duration) || 1),
+        period: ['Morning', 'Afternoon', 'Evening'].includes(item.period) ? item.period : 'Evening',
+        note: String(item.note || '')
+      }))
+    : [];
+
+  normalized.weights = Array.isArray(imported.weights)
+    ? imported.weights.filter(item => item && typeof item.date === 'string' && Number.isFinite(Number(item.weight))).map(item => ({
+        id: item.id || makeId(),
+        createdAt: Number(item.createdAt) || Date.now(),
+        date: item.date,
+        weight: Number(item.weight),
+        period: ['Morning', 'Afternoon', 'Evening'].includes(item.period) ? item.period : 'Morning'
+      }))
+    : [];
+
+  normalized.japanFund = Array.isArray(imported.japanFund)
+    ? imported.japanFund.filter(item => item && typeof item.date === 'string' && Number.isFinite(Number(item.amount))).map(item => ({
+        id: item.id || makeId(),
+        createdAt: Number(item.createdAt) || Date.now(),
+        date: item.date,
+        type: item.type === 'withdrawal' ? 'withdrawal' : 'deposit',
+        amount: Math.abs(Number(item.amount)),
+        note: String(item.note || '')
+      }))
+    : [];
+
+  const startWeight = Number(imported.settings?.startWeight);
+  const goalWeight = Number(imported.settings?.goalWeight);
+  if (Number.isFinite(startWeight) && Number.isFinite(goalWeight) && startWeight > goalWeight) {
+    normalized.settings.startWeight = startWeight;
+    normalized.settings.goalWeight = goalWeight;
+  }
+
+  const numericSettings = [
+    ['fundStartingBalance', 0, true],
+    ['fundGoalAmount', 0, false],
+    ['fundMonthlyTarget', 0, false]
+  ];
+  numericSettings.forEach(([key, floor, allowEqual]) => {
+    const value = Number(imported.settings?.[key]);
+    if (Number.isFinite(value) && (allowEqual ? value >= floor : value > floor)) normalized.settings[key] = value;
+  });
+
+  ['fundContributionStart', 'fundTargetDate'].forEach(key => {
+    const value = String(imported.settings?.[key] || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) normalized.settings[key] = value;
+  });
+
+  return normalized;
+}
+
+function populateSettingsFields() {
+  $('start-weight').value = state.settings.startWeight;
+  $('goal-weight').value = state.settings.goalWeight;
+  $('fund-starting-balance').value = state.settings.fundStartingBalance;
+  $('fund-goal-amount').value = state.settings.fundGoalAmount;
+  $('fund-monthly-target').value = state.settings.fundMonthlyTarget;
+  $('fund-contribution-start').value = state.settings.fundContributionStart;
+  $('fund-target-date').value = state.settings.fundTargetDate;
+}
+
+function showTab(tabName) {
+  document.querySelectorAll('[data-screen]').forEach(screen => {
+    screen.classList.toggle('hidden', screen.dataset.screen !== tabName);
+  });
+  document.querySelectorAll('[data-tab]').forEach(button => {
+    const active = button.dataset.tab === tabName;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  try { localStorage.setItem('project-200-active-tab', tabName); } catch (_) {}
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function sortedWeights() {
+  return [...journeyWeights()].sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
+}
+
+function latestWeightEntry() {
+  const entries = sortedWeights();
+  return entries.at(-1) || null;
+}
+
+function weightProgress(weight) {
+  const start = state.settings.startWeight;
+  const goal = state.settings.goalWeight;
+  return Math.max(0, Math.min(100, ((start - weight) / (start - goal)) * 100));
+}
+
+function mealClass(meal) {
+  return `meal-${String(meal).toLowerCase()}`;
+}
+
+function renderHeader() {
+  $('journey-day-badge').textContent = `Day ${journeyDayCount()}`;
+  $('journey-subtitle').textContent = `${formatDate(JOURNEY_START)} through ${formatDate(todayString)}`;
+}
+
+function nextFundGoalInfo() {
+  const monthlyTarget = state.settings.fundMonthlyTarget;
+  const contributionStart = state.settings.fundContributionStart;
+  const targetDate = state.settings.fundTargetDate;
+  if (!contributionStart || !targetDate) {
+    return { label: 'Not set', detail: 'Set the Japan fund dates in settings.' };
+  }
+
+  const startMonth = monthKey(contributionStart);
+  const targetMonth = monthKey(targetDate);
+  const currentMonth = monthKey();
+
+  if (todayString < contributionStart) {
+    return {
+      label: formatDate(contributionStart),
+      detail: `First monthly goal: ${formatCurrency(monthlyTarget)}`
+    };
+  }
+
+  if (currentMonth >= startMonth && currentMonth <= targetMonth) {
+    const currentNet = fundNetForMonth(currentMonth);
+    if (currentNet < monthlyTarget) {
+      const due = Math.max(0, monthlyTarget - currentNet);
+      return {
+        label: parseLocalDate(`${currentMonth}-01`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }),
+        detail: `${formatCurrency(due)} remaining for this month's target`
+      };
+    }
+  }
+
+  let pointer = parseLocalDate(`${currentMonth}-01`);
+  pointer.setMonth(pointer.getMonth() + 1);
+  while (monthKey(localDateString(pointer)) <= targetMonth) {
+    const key = monthKey(localDateString(pointer));
+    if (key >= startMonth) {
+      return {
+        label: formatDate(localDateString(pointer)),
+        detail: `Next monthly goal: ${formatCurrency(monthlyTarget)}`
+      };
+    }
+    pointer.setMonth(pointer.getMonth() + 1);
+  }
+
+  return {
+    label: formatDate(targetDate),
+    detail: fundBalance() >= state.settings.fundGoalAmount ? 'Savings goal reached.' : 'Trip target date reached.'
+  };
+}
+
+function renderDashboard() {
+  const food = journeyFood();
+  const exercise = journeyExercise();
+  const latest = latestWeightEntry();
+  const currentWeight = latest?.weight ?? state.settings.startWeight;
+  const progress = weightProgress(currentWeight);
+  const unplanned = food.filter(entry => entry.unplanned).length;
+  const exerciseMinutes = exercise.reduce((sum, entry) => sum + entry.duration, 0);
+
+  $('dashboard-current-weight').textContent = currentWeight.toFixed(1);
+  $('dashboard-weight-context').textContent = latest
+    ? `${formatDate(latest.date)} · ${(currentWeight - state.settings.startWeight).toFixed(1)} lb from start`
+    : 'Starting baseline';
+  $('dashboard-progress-percent').textContent = `${Math.round(progress)}%`;
+  $('dashboard-progress-fill').style.width = `${progress}%`;
+  $('dashboard-progress-marker').style.left = `${Math.max(1, Math.min(99, progress))}%`;
+  $('dashboard-start-label').textContent = `${state.settings.startWeight} lb start`;
+  $('dashboard-current-label').textContent = `${currentWeight.toFixed(1)} lb now`;
+  $('dashboard-goal-label').textContent = `${state.settings.goalWeight} lb goal`;
+
+  $('dashboard-food-total').textContent = food.length;
+  $('dashboard-unplanned-total').textContent = unplanned;
+  $('dashboard-unplanned-rate').textContent = `${food.length ? Math.round((unplanned / food.length) * 100) : 0}% of food entries`;
+  $('dashboard-exercise-total').textContent = exercise.length;
+  $('dashboard-exercise-time').textContent = `${exerciseMinutes.toLocaleString()} total minutes`;
+}
+
+function renderJapanFund() {
+  const balance = fundBalance();
+  const goal = state.settings.fundGoalAmount;
+  const remaining = Math.max(0, goal - balance);
+  const percent = goal > 0 ? Math.max(0, Math.min(100, (balance / goal) * 100)) : 0;
+  const currentMonth = monthKey();
+  const thisMonth = fundNetForMonth(currentMonth);
+  const contributionStartMonth = monthKey(state.settings.fundContributionStart);
+  const targetMonth = monthKey(state.settings.fundTargetDate);
+  const reminderActive = currentMonth >= contributionStartMonth && currentMonth <= targetMonth && thisMonth < state.settings.fundMonthlyTarget;
+  const due = Math.max(0, state.settings.fundMonthlyTarget - thisMonth);
+  const depositsTotal = state.japanFund.filter(entry => entry.type !== 'withdrawal').reduce((sum, entry) => sum + entry.amount, 0);
+  const spentTotal = state.japanFund.filter(entry => entry.type === 'withdrawal').reduce((sum, entry) => sum + entry.amount, 0);
+  const nextGoal = nextFundGoalInfo();
+
+  $('fund-balance').textContent = formatCurrency(balance);
+  $('fund-balance-card').textContent = formatCurrency(balance);
+  $('fund-progress-percent').textContent = `${Math.round(percent)}%`;
+  $('fund-progress-bar').style.width = `${percent}%`;
+  $('fund-remaining').textContent = formatCurrency(remaining);
+  $('fund-monthly-saved').textContent = formatCurrency(thisMonth);
+  $('fund-plan-description').textContent = `${formatCurrency(state.settings.fundMonthlyTarget)} per month toward a ${formatCurrency(goal)} trip`;
+  $('fund-total-deposits').textContent = formatCurrency(depositsTotal);
+  $('fund-total-spent').textContent = formatCurrency(spentTotal);
+  $('fund-next-goal-date').textContent = nextGoal.label;
+  $('fund-next-goal-status').textContent = nextGoal.detail;
+
+  $('fund-reminder').classList.toggle('hidden', !reminderActive);
+  if (reminderActive) {
+    $('fund-reminder-title').textContent = `${parseLocalDate(`${currentMonth}-01`).toLocaleDateString(undefined, { month: 'long' })} contribution due`;
+    $('fund-reminder-text').textContent = `${formatCurrency(due)} remains for this month’s target.`;
+  }
+
+  const history = [...state.japanFund].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt).slice(0, 10);
+  $('fund-history').innerHTML = history.length
+    ? history.map(entry => {
+        const signed = fundSignedAmount(entry);
+        return `<div class="compact-row">
+          <div class="compact-row-main">
+            <strong class="${signed >= 0 ? 'positive' : 'negative'}">${signed >= 0 ? '+' : '−'}${formatCurrency(Math.abs(signed))}</strong>
+            <span class="compact-row-meta">${formatDate(entry.date, false)} · ${entry.type === 'withdrawal' ? 'Trip purchase' : 'Deposit'}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</span>
+          </div>
+          <button class="remove-button" type="button" data-remove-type="fund" data-remove-id="${escapeHtml(entry.id)}">Remove</button>
+        </div>`;
+      }).join('')
+    : '<p class="muted">No deposits or trip purchases recorded yet.</p>';
+}
+
+function renderFoodWeek() {
+  const dates = weekDates(foodWeekStart);
+  const entries = state.food.filter(entry => dates.includes(entry.date));
+  const unplanned = entries.filter(entry => entry.unplanned).length;
+  $('food-week-label').textContent = formatWeekRange(foodWeekStart);
+  $('food-week-total').textContent = entries.length;
+  $('food-week-unplanned').textContent = unplanned;
+
+  $('food-week-grid').innerHTML = dates.map(date => {
+    const dateEntries = entries
+      .filter(entry => entry.date === date)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    const parsed = parseLocalDate(date);
+    const entriesHtml = dateEntries.length
+      ? dateEntries.map(entry => `<article class="food-mini-entry ${mealClass(entry.meal)} ${entry.unplanned ? 'unplanned' : ''}">
+          <strong>${escapeHtml(entry.name)}</strong>
+          <span class="mini-meta">${escapeHtml(entry.meal)} · ${escapeHtml(entry.portion)}${entry.unplanned ? ' · Unplanned' : ''}</span>
+          <button class="mini-remove" type="button" aria-label="Remove ${escapeHtml(entry.name)}" data-remove-type="food" data-remove-id="${escapeHtml(entry.id)}">×</button>
+        </article>`).join('')
+      : '<p class="day-empty">No entries</p>';
+
+    return `<section class="day-card ${date === todayString ? 'today' : ''}">
+      <div class="day-card-header">
+        <div><div class="day-name">${parsed.toLocaleDateString(undefined, { weekday: 'short' })}</div><div class="day-number">${parsed.getDate()}</div></div>
+        <span class="day-count">${dateEntries.length || ''}</span>
       </div>
-      <div class="header-actions">
-        <span id="journey-day-badge" class="badge">Day 1</span>
-        <button id="install-app" class="icon-button hidden" type="button" aria-label="Install Project 200">Install</button>
+      ${entriesHtml}
+    </section>`;
+  }).join('');
+}
+
+function renderFundWeek() {
+  const dates = weekDates(fundWeekStart);
+  const entries = state.japanFund.filter(entry => dates.includes(entry.date));
+  const deposits = entries.filter(entry => entry.type !== 'withdrawal').reduce((sum, entry) => sum + entry.amount, 0);
+  const purchases = entries.filter(entry => entry.type === 'withdrawal').reduce((sum, entry) => sum + entry.amount, 0);
+  $('fund-week-label').textContent = formatWeekRange(fundWeekStart);
+  $('fund-week-total').textContent = entries.length;
+  $('fund-week-deposit-total').textContent = formatCurrency(deposits);
+  $('fund-week-withdraw-total').textContent = formatCurrency(purchases);
+
+  $('fund-week-grid').innerHTML = dates.map(date => {
+    const dateEntries = entries
+      .filter(entry => entry.date === date)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    const parsed = parseLocalDate(date);
+    const entriesHtml = dateEntries.length
+      ? dateEntries.map(entry => {
+          const signed = fundSignedAmount(entry);
+          return `<article class="fund-mini-entry ${entry.type}">
+            <strong>${signed >= 0 ? '+' : '−'}${formatCurrency(Math.abs(signed))}</strong>
+            <span class="mini-meta">${entry.type === 'withdrawal' ? 'Trip purchase' : 'Deposit'}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</span>
+            <button class="mini-remove" type="button" aria-label="Remove cash activity" data-remove-type="fund" data-remove-id="${escapeHtml(entry.id)}">×</button>
+          </article>`;
+        }).join('')
+      : '<p class="day-empty">No entries</p>';
+
+    return `<section class="day-card ${date === todayString ? 'today' : ''}">
+      <div class="day-card-header">
+        <div><div class="day-name">${parsed.toLocaleDateString(undefined, { weekday: 'short' })}</div><div class="day-number">${parsed.getDate()}</div></div>
+        <span class="day-count">${dateEntries.length || ''}</span>
       </div>
-    </header>
+      ${entriesHtml}
+    </section>`;
+  }).join('');
+}
 
-    <nav class="tab-bar" aria-label="Project 200 sections">
-      <button class="tab-button active" type="button" data-tab="dashboard" aria-controls="dashboard-tab" aria-selected="true">Dashboard</button>
-      <button class="tab-button" type="button" data-tab="food" aria-controls="food-tab" aria-selected="false">Food</button>
-      <button class="tab-button" type="button" data-tab="weight" aria-controls="weight-tab" aria-selected="false">Weight</button>
-      <button class="tab-button" type="button" data-tab="exercise" aria-controls="exercise-tab" aria-selected="false">Exercise</button>
-    </nav>
+function renderWeightSection() {
+  const entries = sortedWeights();
+  const latest = entries.at(-1);
+  const currentWeight = latest?.weight ?? state.settings.startWeight;
+  const change = currentWeight - state.settings.startWeight;
+  const gap = currentWeight - state.settings.goalWeight;
 
-    <section id="dashboard-tab" class="tab-screen stack-lg" data-screen="dashboard">
-      <section class="panel progress-panel stack-md" aria-labelledby="weight-progress-heading">
-        <div class="section-header">
-          <div>
-            <p class="section-kicker">Weight progress</p>
-            <h2 id="weight-progress-heading"><span id="dashboard-current-weight">222.0</span> lb</h2>
-            <p id="dashboard-weight-context" class="muted">Starting baseline</p>
-          </div>
-          <strong id="dashboard-progress-percent" class="progress-number">0%</strong>
-        </div>
+  $('weight-latest-stat').textContent = currentWeight.toFixed(1);
+  $('weight-change-stat').textContent = `${change > 0 ? '+' : ''}${change.toFixed(1)}`;
+  $('weight-goal-gap-stat').textContent = Math.max(0, gap).toFixed(1);
+  $('weight-chart-range').textContent = `${formatDate(JOURNEY_START)} through ${formatDate(todayString)}`;
+  $('weight-chart-empty').classList.toggle('hidden', entries.length > 0);
+  $('weight-chart-wrap').classList.toggle('hidden', entries.length === 0);
+  $('weight-history-details').classList.toggle('hidden', entries.length === 0);
 
-        <div class="weight-progress-track" aria-label="Progress from starting weight to goal weight">
-          <span id="dashboard-progress-fill" class="weight-progress-fill"></span>
-          <span id="dashboard-progress-marker" class="weight-progress-marker"></span>
-        </div>
-        <div class="progress-labels">
-          <span id="dashboard-start-label">222 lb start</span>
-          <span id="dashboard-current-label">222 lb now</span>
-          <span id="dashboard-goal-label">200 lb goal</span>
-        </div>
-      </section>
+  if (!entries.length) {
+    $('weight-chart').innerHTML = '';
+    $('weight-history').innerHTML = '';
+    return;
+  }
 
-      <section class="summary-grid" aria-label="Program totals">
-        <article class="metric-card">
-          <span class="metric-label">Food entries</span>
-          <strong id="dashboard-food-total" class="metric-value">0</strong>
-          <span class="metric-detail">whole program</span>
-        </article>
-        <article class="metric-card warning-card">
-          <span class="metric-label">Unplanned food</span>
-          <strong id="dashboard-unplanned-total" class="metric-value">0</strong>
-          <span id="dashboard-unplanned-rate" class="metric-detail">0% of food entries</span>
-        </article>
-        <article class="metric-card">
-          <span class="metric-label">Exercise count</span>
-          <strong id="dashboard-exercise-total" class="metric-value">0</strong>
-          <span id="dashboard-exercise-time" class="metric-detail">0 total minutes</span>
-        </article>
-      </section>
+  renderWeightChart(entries);
+  $('weight-history').innerHTML = [...entries].reverse().map(entry => `<div class="compact-row">
+    <div class="compact-row-main">
+      <strong>${entry.weight.toFixed(1)} lb</strong>
+      <span class="compact-row-meta">${formatDate(entry.date)} · ${escapeHtml(entry.period)}</span>
+    </div>
+    <button class="remove-button" type="button" data-remove-type="weight" data-remove-id="${escapeHtml(entry.id)}">Remove</button>
+  </div>`).join('');
+}
 
-      <section class="panel fund-panel stack-md" aria-labelledby="fund-heading">
-        <div class="section-header">
-          <div>
-            <p class="section-kicker">Japan 2027</p>
-            <h2 id="fund-heading"><span id="fund-balance">$500</span> saved</h2>
-            <p id="fund-plan-description" class="muted">$850 per month toward a $10,000 trip</p>
-          </div>
-          <span id="fund-progress-percent" class="badge">5%</span>
-        </div>
+function renderWeightChart(entries) {
+  const svg = $('weight-chart');
+  const width = 800;
+  const height = 320;
+  const margin = { top: 28, right: 30, bottom: 48, left: 58 };
+  const chartWidth = width - margin.left - margin.right;
+  const chartHeight = height - margin.top - margin.bottom;
 
-        <div id="fund-reminder" class="reminder hidden" aria-live="polite">
-          <div>
-            <strong id="fund-reminder-title">Monthly contribution due</strong>
-            <span id="fund-reminder-text">Add $850 this month.</span>
-          </div>
-          <button id="fund-reminder-add" class="button primary compact-button" type="button">Add money</button>
-        </div>
+  const displayEntries = entries.map(entry => ({ ...entry, timestamp: parseLocalDate(entry.date).getTime() }));
+  const minTime = Math.min(parseLocalDate(JOURNEY_START).getTime(), ...displayEntries.map(entry => entry.timestamp));
+  const maxTimeRaw = Math.max(...displayEntries.map(entry => entry.timestamp));
+  const maxTime = maxTimeRaw === minTime ? minTime + 86400000 : maxTimeRaw;
+  const values = [...displayEntries.map(entry => entry.weight), state.settings.startWeight, state.settings.goalWeight];
+  const minWeight = Math.floor(Math.min(...values) - 2);
+  const maxWeight = Math.ceil(Math.max(...values) + 2);
+  const weightRange = Math.max(1, maxWeight - minWeight);
 
-        <div class="standard-progress"><span id="fund-progress-bar"></span></div>
-        <div class="fund-summary-row">
-          <span><strong id="fund-remaining">$9,500</strong> remaining</span>
-          <span><strong id="fund-monthly-saved">$0</strong> this month</span>
-        </div>
+  const x = timestamp => margin.left + ((timestamp - minTime) / (maxTime - minTime)) * chartWidth;
+  const y = weight => margin.top + ((maxWeight - weight) / weightRange) * chartHeight;
+  const points = displayEntries.map(entry => `${x(entry.timestamp).toFixed(1)},${y(entry.weight).toFixed(1)}`).join(' ');
+  const areaPoints = `${x(displayEntries[0].timestamp).toFixed(1)},${(margin.top + chartHeight).toFixed(1)} ${points} ${x(displayEntries.at(-1).timestamp).toFixed(1)},${(margin.top + chartHeight).toFixed(1)}`;
 
-        <details id="fund-entry-details" class="inline-details">
-          <summary>Record deposit or trip purchase</summary>
-          <div class="details-content stack-md">
-            <div class="form-grid four">
-              <label class="field">
-                <span>Type</span>
-                <select id="fund-entry-type">
-                  <option value="deposit">Deposit</option>
-                  <option value="withdrawal">Trip purchase</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Amount</span>
-                <input id="fund-entry-amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="850">
-              </label>
-              <label class="field">
-                <span>Date</span>
-                <input id="fund-entry-date" type="date">
-              </label>
-              <label class="field">
-                <span>Note</span>
-                <input id="fund-entry-note" type="text" maxlength="100" placeholder="September contribution">
-              </label>
-            </div>
-            <div class="form-actions">
-              <button id="add-fund-entry" class="button primary" type="button">Save cash activity</button>
-              <span id="fund-entry-message" class="status-message" aria-live="polite"></span>
-            </div>
-          </div>
-        </details>
+  const gridTicks = 4;
+  const grid = Array.from({ length: gridTicks + 1 }, (_, index) => {
+    const weight = maxWeight - (weightRange * index / gridTicks);
+    const py = y(weight);
+    return `<line class="chart-grid-line" x1="${margin.left}" y1="${py}" x2="${width - margin.right}" y2="${py}"></line>
+      <text class="chart-axis-label" x="${margin.left - 10}" y="${py + 4}" text-anchor="end">${weight.toFixed(0)}</text>`;
+  }).join('');
 
-        <div id="fund-history" class="compact-list" aria-live="polite"></div>
-      </section>
+  const dateLabels = [
+    { date: new Date(minTime), px: margin.left, anchor: 'start' },
+    { date: new Date(maxTime), px: width - margin.right, anchor: 'end' }
+  ].map(item => `<text class="chart-axis-label" x="${item.px}" y="${height - 16}" text-anchor="${item.anchor}">${item.date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</text>`).join('');
 
-      <details class="panel settings-panel">
-        <summary>Settings, backup, and data</summary>
-        <div class="details-content stack-lg">
-          <section class="settings-group stack-md">
-            <h3>Weight goal</h3>
-            <div class="form-grid two">
-              <label class="field"><span>Starting weight</span><input id="start-weight" type="number" step="0.1" inputmode="decimal"></label>
-              <label class="field"><span>Goal weight</span><input id="goal-weight" type="number" step="0.1" inputmode="decimal"></label>
-            </div>
-            <div class="form-actions">
-              <button id="save-weight-settings" class="button secondary" type="button">Save weight goal</button>
-              <span id="weight-settings-message" class="status-message" aria-live="polite"></span>
-            </div>
-          </section>
+  const circles = displayEntries.map((entry, index) => `<circle class="chart-point ${index === displayEntries.length - 1 ? 'latest' : ''}" cx="${x(entry.timestamp)}" cy="${y(entry.weight)}" r="6">
+    <title>${formatDate(entry.date)}: ${entry.weight.toFixed(1)} lb</title>
+  </circle>`).join('');
 
-          <section class="settings-group stack-md">
-            <h3>Japan fund plan</h3>
-            <div class="form-grid three">
-              <label class="field"><span>Starting balance</span><input id="fund-starting-balance" type="number" min="0" step="0.01" inputmode="decimal"></label>
-              <label class="field"><span>Goal amount</span><input id="fund-goal-amount" type="number" min="1" step="1" inputmode="decimal"></label>
-              <label class="field"><span>Monthly target</span><input id="fund-monthly-target" type="number" min="1" step="1" inputmode="decimal"></label>
-              <label class="field"><span>First contribution</span><input id="fund-contribution-start" type="date"></label>
-              <label class="field"><span>Trip target date</span><input id="fund-target-date" type="date"></label>
-            </div>
-            <div class="form-actions">
-              <button id="save-fund-settings" class="button secondary" type="button">Save fund plan</button>
-              <span id="fund-settings-message" class="status-message" aria-live="polite"></span>
-            </div>
-          </section>
+  svg.innerHTML = `${grid}
+    <line class="chart-goal-line" x1="${margin.left}" y1="${y(state.settings.goalWeight)}" x2="${width - margin.right}" y2="${y(state.settings.goalWeight)}"></line>
+    <text class="chart-axis-label" x="${width - margin.right}" y="${y(state.settings.goalWeight) - 8}" text-anchor="end">Goal ${state.settings.goalWeight} lb</text>
+    <polygon class="chart-area" points="${areaPoints}"></polygon>
+    <polyline class="chart-line" points="${points}"></polyline>
+    ${circles}
+    ${dateLabels}`;
+}
 
-          <section class="settings-group stack-md">
-            <h3>Backup and export</h3>
-            <p class="muted">Your data stays on this device. Save a JSON backup occasionally.</p>
-            <div class="button-row">
-              <button id="export-backup" class="button secondary" type="button">Export backup</button>
-              <label class="button secondary file-button">Import backup<input id="import-backup" type="file" accept="application/json,.json"></label>
-              <button id="export-csv" class="button secondary" type="button">Export CSV</button>
-              <button id="clear-all" class="button danger" type="button">Clear all data</button>
-            </div>
-            <span id="data-message" class="status-message" aria-live="polite"></span>
-          </section>
-        </div>
-      </details>
-    </section>
+function renderExerciseWeek() {
+  const dates = weekDates(exerciseWeekStart);
+  const entries = state.exercise.filter(entry => dates.includes(entry.date));
+  const totals = dates.map(date => entries.filter(entry => entry.date === date).reduce((sum, entry) => sum + entry.duration, 0));
+  const maxMinutes = Math.max(1, ...totals);
+  const totalMinutes = totals.reduce((sum, value) => sum + value, 0);
 
-    <section id="food-tab" class="tab-screen hidden stack-lg" data-screen="food">
-      <section class="panel entry-panel stack-md" aria-labelledby="food-entry-heading">
-        <div>
-          <p class="section-kicker">Quick entry</p>
-          <h2 id="food-entry-heading">Log food</h2>
-        </div>
-        <label class="field primary-field">
-          <span>What did you have?</span>
-          <input id="food-name" type="text" maxlength="120" autocomplete="off" placeholder="Meal, snack, or drink">
-        </label>
-        <div class="form-grid four">
-          <label class="field"><span>Meal</span><select id="meal-type"><option>Breakfast</option><option>Lunch</option><option>Dinner</option><option>Snack</option><option>Drink</option></select></label>
-          <label class="field"><span>Portion</span><select id="portion-size"><option>Small</option><option selected>Standard</option><option>Large</option><option>Unsure</option></select></label>
-          <label class="field"><span>Date</span><input id="food-date" type="date"></label>
-          <label class="checkbox-field"><input id="food-unplanned" type="checkbox"><span>Unplanned</span></label>
-        </div>
-        <label class="field"><span>Note <em>optional</em></span><input id="food-note" type="text" maxlength="160" placeholder="Context, hunger, or where you ate"></label>
-        <div class="form-actions">
-          <button id="add-food" class="button primary" type="button">Save food entry</button>
-          <span id="food-message" class="status-message" aria-live="polite"></span>
-        </div>
-      </section>
+  $('exercise-week-label').textContent = formatWeekRange(exerciseWeekStart);
+  $('exercise-week-sessions').textContent = entries.length;
+  $('exercise-week-minutes').textContent = totalMinutes;
+  $('exercise-week-chart').innerHTML = dates.map((date, index) => {
+    const parsed = parseLocalDate(date);
+    const minutes = totals[index];
+    const barHeight = minutes ? Math.max(5, (minutes / maxMinutes) * 100) : 2;
+    return `<div class="exercise-day-column ${date === todayString ? 'today' : ''}">
+      <div class="exercise-bar-space"><div class="exercise-bar" style="height:${barHeight}%" title="${minutes} minutes"></div></div>
+      <strong class="exercise-minutes">${minutes ? `${minutes}m` : '—'}</strong>
+      <span class="exercise-day-label">${parsed.toLocaleDateString(undefined, { weekday: 'short' })}<br>${parsed.getDate()}</span>
+    </div>`;
+  }).join('');
 
-      <section class="panel stack-md" aria-labelledby="food-week-heading">
-        <div class="week-header">
-          <div>
-            <p class="section-kicker">Weekly calendar</p>
-            <h2 id="food-week-heading">Food entries</h2>
-            <p id="food-week-label" class="muted"></p>
-          </div>
-          <div class="week-controls">
-            <button id="food-prev-week" class="icon-button" type="button" aria-label="Previous food week">‹</button>
-            <button id="food-current-week" class="button secondary compact-button" type="button">This week</button>
-            <button id="food-next-week" class="icon-button" type="button" aria-label="Next food week">›</button>
-          </div>
+  const sorted = [...entries].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+  $('exercise-week-list').innerHTML = sorted.length
+    ? sorted.map(entry => `<div class="compact-row">
+        <div class="compact-row-main">
+          <strong>${escapeHtml(entry.exerciseType)} · ${entry.duration} min</strong>
+          <span class="compact-row-meta">${formatDate(entry.date, false)} · ${escapeHtml(entry.period)}${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}</span>
         </div>
-        <div class="week-summary">
-          <span><strong id="food-week-total">0</strong> entries</span>
-          <span><strong id="food-week-unplanned">0</strong> unplanned</span>
-        </div>
-        <div class="calendar-scroll">
-          <div id="food-week-grid" class="food-week-grid" aria-live="polite"></div>
-        </div>
-      </section>
-    </section>
+        <button class="remove-button" type="button" data-remove-type="exercise" data-remove-id="${escapeHtml(entry.id)}">Remove</button>
+      </div>`).join('')
+    : '<p class="muted">No exercise recorded this week.</p>';
+}
 
-    <section id="weight-tab" class="tab-screen hidden stack-lg" data-screen="weight">
-      <section class="panel entry-panel stack-md" aria-labelledby="weight-entry-heading">
-        <div>
-          <p class="section-kicker">Quick entry</p>
-          <h2 id="weight-entry-heading">Log weight</h2>
-        </div>
-        <div class="form-grid three align-end">
-          <label class="field primary-field"><span>Weight in pounds</span><input id="weight-value" type="number" min="80" max="500" step="0.1" inputmode="decimal" placeholder="222.0"></label>
-          <label class="field"><span>Date</span><input id="weight-date" type="date"></label>
-          <label class="field"><span>Time</span><select id="weight-period"><option>Morning</option><option>Afternoon</option><option>Evening</option></select></label>
-        </div>
-        <div class="form-actions">
-          <button id="add-weight" class="button primary" type="button">Save weigh-in</button>
-          <span id="weight-message" class="status-message" aria-live="polite"></span>
-        </div>
-      </section>
+function renderExerciseProgram() {
+  const entries = journeyExercise();
+  const totalMinutes = entries.reduce((sum, entry) => sum + entry.duration, 0);
+  const activeDays = new Set(entries.map(entry => entry.date)).size;
+  const average = entries.length ? Math.round(totalMinutes / entries.length) : 0;
+  $('exercise-program-count').textContent = entries.length;
+  $('exercise-program-minutes').textContent = totalMinutes.toLocaleString();
+  $('exercise-program-days').textContent = activeDays;
+  $('exercise-program-average').textContent = average;
 
-      <section class="panel stack-md" aria-labelledby="weight-chart-heading">
-        <div class="section-header">
-          <div>
-            <p class="section-kicker">Whole program</p>
-            <h2 id="weight-chart-heading">Weight timeline</h2>
-            <p id="weight-chart-range" class="muted">August 1, 2026 through today</p>
-          </div>
-          <div class="chart-summary">
-            <span><strong id="weight-latest-stat">222.0</strong> latest</span>
-            <span><strong id="weight-change-stat">0.0</strong> lb change</span>
-            <span><strong id="weight-goal-gap-stat">22.0</strong> lb to goal</span>
-          </div>
-        </div>
-        <div id="weight-chart-empty" class="empty-state">Add a weigh-in to begin the timeline.</div>
-        <div id="weight-chart-wrap" class="chart-wrap hidden">
-          <svg id="weight-chart" viewBox="0 0 800 320" role="img" aria-label="Weight timeline chart"></svg>
-        </div>
-        <details id="weight-history-details" class="inline-details hidden">
-          <summary>Weigh-in history</summary>
-          <div id="weight-history" class="compact-list details-content"></div>
-        </details>
-      </section>
-    </section>
+  const typeTotals = EXERCISE_TYPES.map(type => {
+    const typeEntries = entries.filter(entry => entry.exerciseType === type);
+    return {
+      type,
+      sessions: typeEntries.length,
+      minutes: typeEntries.reduce((sum, entry) => sum + entry.duration, 0)
+    };
+  }).filter(item => item.sessions > 0).sort((a, b) => b.minutes - a.minutes);
+  const max = Math.max(1, ...typeTotals.map(item => item.minutes));
+  $('exercise-type-breakdown').innerHTML = typeTotals.length
+    ? typeTotals.map(item => `<div class="breakdown-row">
+        <div class="breakdown-label"><strong>${escapeHtml(item.type)}</strong><span>${item.sessions} sessions · ${item.minutes} min</span></div>
+        <div class="breakdown-track"><div class="breakdown-fill" style="width:${(item.minutes / max) * 100}%"></div></div>
+      </div>`).join('')
+    : '<p class="muted">Activity breakdown will appear after your first session.</p>';
+}
 
-    <section id="exercise-tab" class="tab-screen hidden stack-lg" data-screen="exercise">
-      <section class="panel entry-panel stack-md" aria-labelledby="exercise-entry-heading">
-        <div>
-          <p class="section-kicker">Quick entry</p>
-          <h2 id="exercise-entry-heading">Log exercise</h2>
-        </div>
-        <div class="form-grid four">
-          <label class="field"><span>Activity</span><select id="exercise-type"><option>Aikido-Lite</option><option>Aikido-Intense</option><option>Jog</option><option>Gym</option><option>Other</option></select></label>
-          <label class="field primary-field"><span>Minutes</span><input id="exercise-duration" type="number" min="1" max="600" step="1" inputmode="numeric" placeholder="45"></label>
-          <label class="field"><span>Date</span><input id="exercise-date" type="date"></label>
-          <label class="field"><span>Time</span><select id="exercise-period"><option>Morning</option><option>Afternoon</option><option selected>Evening</option></select></label>
-        </div>
-        <label class="field"><span>Note <em>optional</em></span><input id="exercise-note" type="text" maxlength="160" placeholder="Class focus, route, or workout"></label>
-        <div class="form-actions">
-          <button id="add-exercise" class="button primary" type="button">Save exercise</button>
-          <span id="exercise-message" class="status-message" aria-live="polite"></span>
-        </div>
-      </section>
+function renderAll() {
+  renderHeader();
+  renderDashboard();
+  renderJapanFund();
+  renderFoodWeek();
+  renderFundWeek();
+  renderWeightSection();
+  renderExerciseWeek();
+  renderExerciseProgram();
+}
 
-      <section class="panel stack-md" aria-labelledby="exercise-week-heading">
-        <div class="week-header">
-          <div>
-            <p class="section-kicker">Weekly view</p>
-            <h2 id="exercise-week-heading">Minutes per day</h2>
-            <p id="exercise-week-label" class="muted"></p>
-          </div>
-          <div class="week-controls">
-            <button id="exercise-prev-week" class="icon-button" type="button" aria-label="Previous exercise week">‹</button>
-            <button id="exercise-current-week" class="button secondary compact-button" type="button">This week</button>
-            <button id="exercise-next-week" class="icon-button" type="button" aria-label="Next exercise week">›</button>
-          </div>
-        </div>
-        <div id="exercise-week-chart" class="exercise-week-chart" aria-live="polite"></div>
-        <div class="week-summary">
-          <span><strong id="exercise-week-sessions">0</strong> sessions</span>
-          <span><strong id="exercise-week-minutes">0</strong> minutes</span>
-        </div>
-        <div id="exercise-week-list" class="compact-list"></div>
-      </section>
+async function commitState(messageElement = null, message = '') {
+  try {
+    await saveState();
+    renderAll();
+    if (messageElement) {
+      messageElement.textContent = message;
+      window.setTimeout(() => { if (messageElement.textContent === message) messageElement.textContent = ''; }, 3000);
+    }
+  } catch (error) {
+    console.error(error);
+    if (messageElement) messageElement.textContent = 'Could not save. Please try again.';
+  }
+}
 
-      <section class="panel stack-md" aria-labelledby="exercise-program-heading">
-        <div>
-          <p class="section-kicker">Whole program</p>
-          <h2 id="exercise-program-heading">Exercise totals</h2>
-        </div>
-        <div class="summary-grid four-metrics">
-          <article class="metric-card"><span class="metric-label">Sessions</span><strong id="exercise-program-count" class="metric-value">0</strong><span class="metric-detail">completed</span></article>
-          <article class="metric-card"><span class="metric-label">Total time</span><strong id="exercise-program-minutes" class="metric-value">0</strong><span class="metric-detail">minutes</span></article>
-          <article class="metric-card"><span class="metric-label">Active days</span><strong id="exercise-program-days" class="metric-value">0</strong><span class="metric-detail">with exercise</span></article>
-          <article class="metric-card"><span class="metric-label">Average</span><strong id="exercise-program-average" class="metric-value">0</strong><span class="metric-detail">minutes/session</span></article>
-        </div>
-        <div id="exercise-type-breakdown" class="breakdown-list"></div>
-      </section>
-    </section>
-  </main>
+async function addFood() {
+  const name = $('food-name').value.trim();
+  if (!name) {
+    $('food-message').textContent = 'Enter the food or drink.';
+    $('food-name').focus();
+    return;
+  }
+  const date = $('food-date').value || todayString;
+  state.food.push({
+    id: makeId(),
+    createdAt: Date.now(),
+    date,
+    time: currentTime(),
+    name,
+    meal: $('meal-type').value,
+    portion: $('portion-size').value,
+    note: $('food-note').value.trim(),
+    unplanned: $('food-unplanned').checked
+  });
+  foodWeekStart = startOfWeek(date);
+  $('food-name').value = '';
+  $('food-note').value = '';
+  $('food-unplanned').checked = false;
+  await commitState($('food-message'), 'Food entry saved.');
+}
 
-  <script src="./app.js" defer></script>
-</body>
-</html>
+async function addWeight() {
+  const weight = Number($('weight-value').value);
+  if (!Number.isFinite(weight) || weight < 80 || weight > 500) {
+    $('weight-message').textContent = 'Enter a valid weight in pounds.';
+    $('weight-value').focus();
+    return;
+  }
+  state.weights.push({
+    id: makeId(),
+    createdAt: Date.now(),
+    date: $('weight-date').value || todayString,
+    weight,
+    period: $('weight-period').value
+  });
+  $('weight-value').value = '';
+  await commitState($('weight-message'), 'Weigh-in saved.');
+}
+
+async function addExercise() {
+  const duration = Number($('exercise-duration').value);
+  if (!Number.isFinite(duration) || duration < 1 || duration > 600) {
+    $('exercise-message').textContent = 'Enter exercise minutes between 1 and 600.';
+    $('exercise-duration').focus();
+    return;
+  }
+  const date = $('exercise-date').value || todayString;
+  state.exercise.push({
+    id: makeId(),
+    createdAt: Date.now(),
+    date,
+    exerciseType: $('exercise-type').value,
+    duration,
+    period: $('exercise-period').value,
+    note: $('exercise-note').value.trim()
+  });
+  exerciseWeekStart = startOfWeek(date);
+  $('exercise-duration').value = '';
+  $('exercise-note').value = '';
+  await commitState($('exercise-message'), 'Exercise saved.');
+}
+
+async function addFundEntry() {
+  const amount = Number($('fund-entry-amount').value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    $('fund-entry-message').textContent = 'Enter a positive dollar amount.';
+    $('fund-entry-amount').focus();
+    return;
+  }
+  const date = $('fund-entry-date').value || todayString;
+  state.japanFund.push({
+    id: makeId(),
+    createdAt: Date.now(),
+    date,
+    type: $('fund-entry-type').value === 'withdrawal' ? 'withdrawal' : 'deposit',
+    amount,
+    note: $('fund-entry-note').value.trim()
+  });
+  fundWeekStart = startOfWeek(date);
+  $('fund-entry-amount').value = '';
+  $('fund-entry-note').value = '';
+  await commitState($('fund-entry-message'), 'Cash activity saved.');
+}
+
+async function removeEntry(type, id) {
+  const collectionMap = { food: 'food', weight: 'weights', exercise: 'exercise', fund: 'japanFund' };
+  const collection = collectionMap[type];
+  if (!collection) return;
+  state[collection] = state[collection].filter(entry => entry.id !== id);
+  await commitState();
+}
+
+async function saveWeightSettings() {
+  const start = Number($('start-weight').value);
+  const goal = Number($('goal-weight').value);
+  if (!Number.isFinite(start) || !Number.isFinite(goal) || start <= goal) {
+    $('weight-settings-message').textContent = 'Starting weight must be greater than goal weight.';
+    return;
+  }
+  state.settings.startWeight = start;
+  state.settings.goalWeight = goal;
+  await commitState($('weight-settings-message'), 'Weight goal saved.');
+}
+
+async function saveFundSettings() {
+  const startingBalance = Number($('fund-starting-balance').value);
+  const goalAmount = Number($('fund-goal-amount').value);
+  const monthlyTarget = Number($('fund-monthly-target').value);
+  const contributionStart = $('fund-contribution-start').value;
+  const targetDate = $('fund-target-date').value;
+  if (!Number.isFinite(startingBalance) || startingBalance < 0 || !Number.isFinite(goalAmount) || goalAmount <= 0 || !Number.isFinite(monthlyTarget) || monthlyTarget <= 0) {
+    $('fund-settings-message').textContent = 'Enter valid fund amounts.';
+    return;
+  }
+  if (!contributionStart || !targetDate || contributionStart > targetDate) {
+    $('fund-settings-message').textContent = 'Check the reminder and target dates.';
+    return;
+  }
+  Object.assign(state.settings, { fundStartingBalance: startingBalance, fundGoalAmount: goalAmount, fundMonthlyTarget: monthlyTarget, fundContributionStart: contributionStart, fundTargetDate: targetDate });
+  await commitState($('fund-settings-message'), 'Fund plan saved.');
+}
+
+function downloadFile(filename, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportCsv() {
+  const rows = [['Date', 'Clock Time', 'Record Type', 'Name', 'Category', 'Portion, Duration, or Amount', 'Time of Day', 'Unplanned', 'Weight', 'Note']];
+  state.food.forEach(entry => rows.push([entry.date, entry.time, 'Food', entry.name, entry.meal, entry.portion, '', entry.unplanned ? 'Yes' : 'No', '', entry.note]));
+  state.exercise.forEach(entry => rows.push([entry.date, '', 'Exercise', entry.exerciseType, entry.exerciseType, `${entry.duration} minutes`, entry.period, '', '', entry.note]));
+  state.weights.forEach(entry => rows.push([entry.date, '', 'Weight', '', '', '', entry.period, '', entry.weight, '']));
+  state.japanFund.forEach(entry => rows.push([entry.date, '', 'Japan Fund', entry.type === 'withdrawal' ? 'Trip purchase' : 'Deposit', 'Japan 2027', fundSignedAmount(entry).toFixed(2), '', '', '', entry.note]));
+  const csv = rows.map(row => row.map(value => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n');
+  downloadFile(`project-200-data-${todayString}.csv`, csv, 'text/csv;charset=utf-8');
+}
+
+async function importBackup(file) {
+  const text = await file.text();
+  state = normalizeState(JSON.parse(text));
+  populateSettingsFields();
+  await commitState($('data-message'), 'Backup imported successfully.');
+}
+
+async function clearAllData() {
+  if (!window.confirm('Clear every Project 200 entry? This cannot be undone without a backup.')) return;
+  state = structuredClone(DEFAULT_STATE);
+  populateSettingsFields();
+  await commitState($('data-message'), 'All tracked data was cleared.');
+}
+
+function setupInstallFlow() {
+  const installButton = $('install-app');
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  if (isStandalone) installButton.classList.add('hidden');
+
+  window.addEventListener('beforeinstallprompt', event => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    installButton.classList.remove('hidden');
+  });
+  installButton.addEventListener('click', async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    installButton.classList.add('hidden');
+  });
+  window.addEventListener('appinstalled', () => installButton.classList.add('hidden'));
+}
+
+function bindEvents() {
+  document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => showTab(button.dataset.tab)));
+  $('add-food').addEventListener('click', addFood);
+  $('add-weight').addEventListener('click', addWeight);
+  $('add-exercise').addEventListener('click', addExercise);
+  $('add-fund-entry').addEventListener('click', addFundEntry);
+  $('save-weight-settings').addEventListener('click', saveWeightSettings);
+  $('save-fund-settings').addEventListener('click', saveFundSettings);
+
+  $('food-prev-week').addEventListener('click', () => { foodWeekStart = addDays(foodWeekStart, -7); renderFoodWeek(); });
+  $('food-next-week').addEventListener('click', () => { foodWeekStart = addDays(foodWeekStart, 7); renderFoodWeek(); });
+  $('food-current-week').addEventListener('click', () => { foodWeekStart = startOfWeek(); renderFoodWeek(); });
+  $('exercise-prev-week').addEventListener('click', () => { exerciseWeekStart = addDays(exerciseWeekStart, -7); renderExerciseWeek(); });
+  $('exercise-next-week').addEventListener('click', () => { exerciseWeekStart = addDays(exerciseWeekStart, 7); renderExerciseWeek(); });
+  $('exercise-current-week').addEventListener('click', () => { exerciseWeekStart = startOfWeek(); renderExerciseWeek(); });
+  $('fund-prev-week').addEventListener('click', () => { fundWeekStart = addDays(fundWeekStart, -7); renderFundWeek(); });
+  $('fund-next-week').addEventListener('click', () => { fundWeekStart = addDays(fundWeekStart, 7); renderFundWeek(); });
+  $('fund-current-week').addEventListener('click', () => { fundWeekStart = startOfWeek(); renderFundWeek(); });
+
+  $('fund-reminder-add').addEventListener('click', () => {
+    const due = Math.max(0, state.settings.fundMonthlyTarget - fundNetForMonth(monthKey()));
+    showTab('japan');
+    $('fund-entry-type').value = 'deposit';
+    $('fund-entry-date').value = todayString;
+    $('fund-entry-amount').value = (due || state.settings.fundMonthlyTarget).toFixed(2).replace(/\.00$/, '');
+    window.setTimeout(() => $('fund-entry-amount').focus(), 100);
+  });
+
+  document.body.addEventListener('click', event => {
+    const button = event.target.closest('[data-remove-type][data-remove-id]');
+    if (!button) return;
+    removeEntry(button.dataset.removeType, button.dataset.removeId);
+  });
+
+  $('export-backup').addEventListener('click', () => downloadFile(`project-200-backup-${todayString}.json`, JSON.stringify(state, null, 2), 'application/json'));
+  $('export-csv').addEventListener('click', exportCsv);
+  $('clear-all').addEventListener('click', clearAllData);
+  $('import-backup').addEventListener('change', async event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      await importBackup(file);
+    } catch (error) {
+      console.error(error);
+      $('data-message').textContent = 'That file could not be imported.';
+    }
+    event.target.value = '';
+  });
+
+  $('food-name').addEventListener('keydown', event => { if (event.key === 'Enter') addFood(); });
+  $('weight-value').addEventListener('keydown', event => { if (event.key === 'Enter') addWeight(); });
+  $('exercise-duration').addEventListener('keydown', event => { if (event.key === 'Enter') addExercise(); });
+  $('fund-entry-amount').addEventListener('keydown', event => { if (event.key === 'Enter') addFundEntry(); });
+}
+
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+  try {
+    const registration = await navigator.serviceWorker.register('./sw.js');
+    registration.update();
+  } catch (error) {
+    console.error('Service worker registration failed:', error);
+  }
+}
+
+async function initialize() {
+  foodWeekStart = startOfWeek();
+  exerciseWeekStart = startOfWeek();
+  fundWeekStart = startOfWeek();
+  $('food-date').value = todayString;
+  $('weight-date').value = todayString;
+  $('exercise-date').value = todayString;
+  $('fund-entry-date').value = todayString;
+
+  try {
+    const saved = await loadState();
+    state = normalizeState(saved || DEFAULT_STATE);
+  } catch (error) {
+    console.error('Could not load local data:', error);
+    state = structuredClone(DEFAULT_STATE);
+    $('data-message').textContent = 'Local storage could not be opened. Entries may not persist.';
+  }
+
+  populateSettingsFields();
+  bindEvents();
+  setupInstallFlow();
+  renderAll();
+
+  let initialTab = 'dashboard';
+  try {
+    const savedTab = localStorage.getItem('project-200-active-tab');
+    if (['dashboard', 'food', 'weight', 'exercise', 'japan'].includes(savedTab)) initialTab = savedTab;
+  } catch (_) {}
+  showTab(initialTab);
+  registerServiceWorker();
+}
+
+initialize();
