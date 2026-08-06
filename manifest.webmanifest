@@ -1,7 +1,7 @@
 {
   "name": "Project 200 Fitness and Japan Tracker",
   "short_name": "Project 200",
-  "description": "A private, offline-friendly tracker for food, weight, exercise, and the Japan trip savings goal.",
+  "description": "A private, offline-friendly fitness and Japan savings tracker with a compact rolling weight trend dashboard.",
   "id": "./",
   "start_url": "./",
   "scope": "./",

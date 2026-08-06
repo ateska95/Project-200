@@ -8,7 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png" sizes="192x192">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
-  <link rel="stylesheet" href="./styles-v5.css">
+  <link rel="stylesheet" href="./styles-v6.css">
   <title>Project 200</title>
 </head>
 <body>
@@ -35,41 +35,61 @@
       <button class="tab-button" type="button" data-tab="japan" aria-controls="japan-tab" aria-selected="false">Japan</button>
     </nav>
 
-    <section id="dashboard-tab" class="tab-screen stack-lg" data-screen="dashboard">
-      <section class="panel progress-panel stack-md" aria-labelledby="weight-progress-heading">
-        <div class="section-header">
+    <section id="dashboard-tab" class="tab-screen dashboard-screen" data-screen="dashboard">
+      <section class="panel trend-card" aria-labelledby="dashboard-trend-heading">
+        <div class="trend-card-header">
           <div>
-            <p class="section-kicker">Weight progress</p>
-            <h2 id="weight-progress-heading"><span id="dashboard-current-weight">222.0</span> lb</h2>
-            <p id="dashboard-weight-context" class="muted">Starting baseline</p>
+            <p class="section-kicker">Weight trend</p>
+            <div class="trend-title-row">
+              <h2 id="dashboard-trend-heading"><span id="dashboard-trend-weight">222.0</span> <small>lb</small></h2>
+              <span class="trend-label">3-day average</span>
+            </div>
+            <p id="dashboard-trend-sample" class="muted trend-sample">Starting baseline</p>
           </div>
-          <strong id="dashboard-progress-percent" class="progress-number">0%</strong>
+          <strong id="dashboard-progress-percent" class="progress-number compact-progress-number">0%</strong>
         </div>
 
-        <div class="weight-progress-track" aria-label="Progress from starting weight to goal weight">
-          <span id="dashboard-progress-fill" class="weight-progress-fill"></span>
-          <span id="dashboard-progress-marker" class="weight-progress-marker"></span>
+        <div class="trend-stat-strip" aria-label="Weight summary">
+          <span><small>Latest</small><strong id="dashboard-latest-weight">—</strong></span>
+          <span><small>Lost</small><strong id="dashboard-loss-total">0.0 lb</strong></span>
+          <span><small>To goal</small><strong id="dashboard-goal-remaining">22.0 lb</strong></span>
         </div>
-        <div class="progress-labels">
-          <span id="dashboard-start-label">222 lb start</span>
-          <span id="dashboard-current-label">222 lb now</span>
-          <span id="dashboard-goal-label">200 lb goal</span>
+
+        <div class="compact-progress-block">
+          <div class="weight-progress-track compact-weight-track" aria-label="Progress based on the 3-day rolling average">
+            <span id="dashboard-progress-fill" class="weight-progress-fill"></span>
+            <span id="dashboard-progress-marker" class="weight-progress-marker compact-weight-marker"></span>
+          </div>
+          <div class="progress-labels compact-progress-labels">
+            <span id="dashboard-start-label">222 lb start</span>
+            <span>3-day trend</span>
+            <span id="dashboard-goal-label">200 lb goal</span>
+          </div>
         </div>
+
+        <button id="dashboard-trend-open" class="trend-preview-button" type="button" aria-haspopup="dialog" aria-controls="weight-trend-modal">
+          <span class="trend-preview-header">
+            <span><strong>30-day trend</strong><small>Actual weigh-ins and rolling average</small></span>
+            <span class="trend-expand-label">Expand ↗</span>
+          </span>
+          <span id="dashboard-trend-empty" class="trend-preview-empty">Add a weigh-in to begin the trend chart.</span>
+          <svg id="dashboard-trend-chart" class="dashboard-trend-chart hidden" viewBox="0 0 640 90" role="img" aria-label="Compact 30-day weight trend"></svg>
+        </button>
       </section>
 
-      <section class="summary-grid" aria-label="Program totals">
-        <article class="metric-card">
+      <section class="summary-grid dashboard-summary-grid" aria-label="Program totals">
+        <article class="metric-card dashboard-metric-card">
           <span class="metric-label">Food entries</span>
           <strong id="dashboard-food-total" class="metric-value">0</strong>
           <span class="metric-detail">whole program</span>
         </article>
-        <article class="metric-card warning-card">
+        <article class="metric-card dashboard-metric-card warning-card">
           <span class="metric-label">Unplanned food</span>
           <strong id="dashboard-unplanned-total" class="metric-value">0</strong>
           <span id="dashboard-unplanned-rate" class="metric-detail">0% of food entries</span>
         </article>
-        <article class="metric-card">
-          <span class="metric-label">Exercise count</span>
+        <article class="metric-card dashboard-metric-card">
+          <span class="metric-label">Exercise</span>
           <strong id="dashboard-exercise-total" class="metric-value">0</strong>
           <span id="dashboard-exercise-time" class="metric-detail">0 total minutes</span>
         </article>
@@ -357,6 +377,42 @@
     </section>
   </main>
 
-  <script src="./app-v5.js" defer></script>
+
+  <div id="weight-trend-modal" class="trend-modal hidden" role="dialog" aria-modal="true" aria-labelledby="weight-trend-modal-title">
+    <button id="weight-trend-backdrop" class="trend-modal-backdrop" type="button" aria-label="Close weight trend"></button>
+    <section class="trend-modal-panel">
+      <header class="trend-modal-header">
+        <div>
+          <p class="section-kicker">Weight progress</p>
+          <h2 id="weight-trend-modal-title">Weight trend</h2>
+        </div>
+        <button id="weight-trend-close" class="icon-button trend-close-button" type="button" aria-label="Close weight trend">×</button>
+      </header>
+
+      <div class="trend-modal-summary">
+        <span><small>3-day trend</small><strong id="expanded-trend-weight">222.0 lb</strong></span>
+        <span><small>Latest</small><strong id="expanded-latest-weight">—</strong></span>
+        <span><small>From start</small><strong id="expanded-change-weight">0.0 lb</strong></span>
+      </div>
+
+      <div class="trend-range-control" aria-label="Weight chart range">
+        <button class="trend-range-button active" type="button" data-trend-range="30">30 days</button>
+        <button class="trend-range-button" type="button" data-trend-range="90">90 days</button>
+        <button class="trend-range-button" type="button" data-trend-range="all">All</button>
+      </div>
+
+      <div id="expanded-trend-empty" class="empty-state">Add a weigh-in to begin the trend chart.</div>
+      <div id="expanded-trend-chart-wrap" class="expanded-trend-chart-wrap hidden">
+        <svg id="expanded-weight-trend-chart" viewBox="0 0 900 420" role="img" aria-label="Expanded weight trend chart"></svg>
+        <div class="trend-legend" aria-label="Chart legend">
+          <span><i class="legend-dot"></i>Actual weigh-ins</span>
+          <span><i class="legend-line"></i>3-day rolling average</span>
+          <span><i class="legend-goal"></i>Goal: <strong id="expanded-goal-label">200 lb</strong></span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="./app-v6.js" defer></script>
 </body>
 </html>
