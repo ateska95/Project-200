@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Project 200 Data Recovery</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#17243a;background:#f4f7fb}
+    *{box-sizing:border-box}body{margin:0}main{width:min(760px,100%);margin:auto;padding:20px}
+    h1{font-size:1.65rem;margin:.2rem 0}.muted{color:#61708a}.card{background:#fff;border:1px solid #d8e1ee;border-radius:16px;padding:16px;margin:14px 0;box-shadow:0 8px 24px rgba(20,40,80,.07)}
+    .status{padding:12px;border-radius:12px;background:#edf4ff}.good{background:#eaf7ef;color:#12633b}.warn{background:#fff5dc;color:#765000}.bad{background:#fff0ee;color:#8e2119}
+    button{width:100%;min-height:48px;border:0;border-radius:12px;padding:12px;margin-top:10px;font:inherit;font-weight:700;background:#2d6cdf;color:#fff}
+    button.secondary{background:#eef3fb;color:#223654;border:1px solid #cad7e8}button:disabled{opacity:.45}
+    pre,textarea{width:100%;white-space:pre-wrap;overflow-wrap:anywhere;background:#f7f9fc;border:1px solid #d8e1ee;border-radius:10px;padding:10px;font:12px/1.4 ui-monospace,Consolas,monospace}
+    textarea{min-height:260px}.row{display:grid;grid-template-columns:120px 1fr;gap:8px;margin:6px 0;font-size:.9rem}.row strong{color:#5c6d86}
+  </style>
+</head>
+<body>
+<main>
+  <p class="muted">Project 200</p>
+  <h1>Read-only data recovery</h1>
+  <p class="muted">This page reads browser storage for this site. It does not clear, overwrite, or migrate anything.</p>
+
+  <section class="card">
+    <div id="status" class="status">Preparing scan…</div>
+    <div class="row"><strong>Origin</strong><span id="origin"></span></div>
+    <div class="row"><strong>Address</strong><span id="address"></span></div>
+    <div class="row"><strong>Mode</strong><span id="mode"></span></div>
+    <div class="row"><strong>Storage used</strong><span id="usage">Checking…</span></div>
+    <button id="scan">Scan storage again</button>
+    <button id="download" disabled>Download complete recovery JSON</button>
+    <button id="copy" class="secondary" disabled>Copy JSON to clipboard</button>
+  </section>
+
+  <section class="card">
+    <h2>Scan summary</h2>
+    <pre id="summary">No scan completed yet.</pre>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary><strong>Show complete recovered JSON</strong></summary>
+      <textarea id="raw" readonly spellcheck="false"></textarea>
+    </details>
+  </section>
+</main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+let recovery=null;
+
+function setStatus(text,kind=''){$('status').className='status '+kind;$('status').textContent=text}
+function cloneSafe(value){try{return structuredClone(value)}catch(_){try{return JSON.parse(JSON.stringify(value))}catch(e){return String(value)}}}
+function req(request){return new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error||new Error('IndexedDB request failed'))})}
+function txDone(tx){return new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||new Error('Transaction failed'));tx.onabort=()=>reject(tx.error||new Error('Transaction aborted'))})}
+
+async function existingDatabaseNames(){
+  const names=new Set();
+  if(typeof indexedDB.databases==='function'){
+    try{(await indexedDB.databases()).forEach(d=>{if(d.name)names.add(d.name)})}catch(_){}
+  }
+  names.add('project-200-db');
+  return [...names];
+}
+
+async function openExisting(name){
+  return new Promise(resolve=>{
+    let created=false;
+    const request=indexedDB.open(name);
+    request.onupgradeneeded=()=>{created=true;request.transaction.abort()};
+    request.onerror=()=>resolve({name,error:created?'Database did not previously exist':(request.error?.message||request.error?.name||'Open failed')});
+    request.onsuccess=()=>resolve({name,db:request.result});
+  });
+}
+
+async function readDatabase(name){
+  const opened=await openExisting(name);
+  if(!opened.db)return {name,error:opened.error};
+  const db=opened.db;
+  const result={name,version:db.version,stores:{}};
+  try{
+    for(const storeName of [...db.objectStoreNames]){
+      try{
+        const tx=db.transaction(storeName,'readonly');
+        const store=tx.objectStore(storeName);
+        const [keys,values]=await Promise.all([req(store.getAllKeys()),req(store.getAll())]);
+        await txDone(tx).catch(()=>{});
+        result.stores[storeName]=keys.map((key,i)=>({key:cloneSafe(key),value:cloneSafe(values[i])}));
+      }catch(error){result.stores[storeName]={error:error?.message||String(error)}}
+    }
+  }finally{db.close()}
+  return result;
+}
+
+function localStorageDump(){
+  const out={};
+  try{for(let i=0;i<localStorage.length;i++){const key=localStorage.key(i);out[key]=localStorage.getItem(key)}}catch(error){out.__error=error?.message||String(error)}
+  return out;
+}
+
+function summarize(data){
+  const lines=[];
+  lines.push(`Databases checked: ${data.databases.length}`);
+  for(const db of data.databases){
+    if(db.error){lines.push(`• ${db.name}: ${db.error}`);continue}
+    const stores=Object.entries(db.stores);
+    lines.push(`• ${db.name} (version ${db.version}): ${stores.length} store(s)`);
+    for(const [storeName,rows] of stores){
+      if(Array.isArray(rows)){
+        lines.push(`  - ${storeName}: ${rows.length} record(s)`);
+        for(const row of rows){
+          const v=row.value;
+          if(v&&typeof v==='object'){
+            const counts=['food','weights','exercise','japanFund'].filter(k=>Array.isArray(v[k])).map(k=>`${k}=${v[k].length}`);
+            if(counts.length)lines.push(`    key ${JSON.stringify(row.key)}: ${counts.join(', ')}`);
+          }
+        }
+      }else lines.push(`  - ${storeName}: ${rows.error||'Could not read'}`);
+    }
+  }
+  lines.push(`localStorage keys: ${Object.keys(data.localStorage).length}`);
+  return lines.join('\n');
+}
+
+async function scan(){
+  $('scan').disabled=true;$('download').disabled=true;$('copy').disabled=true;
+  setStatus('Scanning IndexedDB and localStorage…');
+  try{
+    const names=await existingDatabaseNames();
+    const databases=[];
+    for(const name of names)databases.push(await readDatabase(name));
+    let estimate=null;try{estimate=await navigator.storage?.estimate?.()}catch(_){}
+    recovery={capturedAt:new Date().toISOString(),origin:location.origin,address:location.href,displayMode:(matchMedia('(display-mode: standalone)').matches?'standalone':'browser'),storageEstimate:estimate?{usage:estimate.usage,quota:estimate.quota}:null,databases,localStorage:localStorageDump()};
+    const json=JSON.stringify(recovery,null,2);
+    $('raw').value=json;$('summary').textContent=summarize(recovery);
+    $('download').disabled=false;$('copy').disabled=false;
+    const p200=databases.find(d=>d.name==='project-200-db');
+    const rows=p200?.stores?.['app-state'];
+    const current=Array.isArray(rows)?rows.find(r=>r.key==='current'):null;
+    const value=current?.value;
+    const total=value&&typeof value==='object'?['food','weights','exercise','japanFund'].reduce((n,k)=>n+(Array.isArray(value[k])?value[k].length:0),0):0;
+    if(total>0)setStatus(`Success: found ${total} Project 200 entries. Download the JSON now.`,'good');
+    else if(current)setStatus('The Project 200 current record exists, but it contains zero tracked entries. Review the full JSON for any other records.','warn');
+    else setStatus('No Project 200 current record was found. Review the database list and full JSON for older or differently named records.','bad');
+  }catch(error){setStatus(`Scan failed: ${error?.message||error}`,'bad')}
+  finally{$('scan').disabled=false}
+}
+
+function download(){
+  if(!recovery)return;
+  const blob=new Blob([JSON.stringify(recovery,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');
+  a.href=url;a.download=`project-200-storage-recovery-${new Date().toISOString().slice(0,10)}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+}
+async function copy(){try{await navigator.clipboard.writeText($('raw').value);setStatus('Recovery JSON copied to the clipboard.','good')}catch(error){setStatus('Clipboard copy failed. Use the text box or download button.','warn')}}
+
+$('origin').textContent=location.origin;$('address').textContent=location.href;$('mode').textContent=matchMedia('(display-mode: standalone)').matches?'Standalone app':'Chrome browser tab';
+navigator.storage?.estimate?.().then(e=>{$('usage').textContent=e?`${Math.round((e.usage||0)/1024).toLocaleString()} KB`:'Unavailable'}).catch(()=>{$('usage').textContent='Unavailable'});
+$('scan').addEventListener('click',scan);$('download').addEventListener('click',download);$('copy').addEventListener('click',copy);
+scan();
+</script>
+</body>
+</html>
