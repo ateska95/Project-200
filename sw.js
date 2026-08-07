@@ -1,10 +1,11 @@
-const CACHE_NAME = 'project-200-v5-sheets-v1';
+const CACHE_NAME = 'project-200-v5-sheets-edit-v1';
 const APP_SHELL = [
   './',
   './index.html',
   './styles-v5.css',
   './app-v5.js',
   './sync-v1.js',
+  './edit-v1.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -25,18 +26,19 @@ self.addEventListener('activate', event => {
   self.clients.claim();
 });
 
-async function injectSyncScript(response) {
+async function injectAddOnScripts(response) {
   const html = await response.text();
-  if (html.includes('sync-v1.js')) {
-    return new Response(html, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers
-    });
+  let injected = html;
+  if (!injected.includes('sync-v1.js')) {
+    injected = injected.includes('</body>')
+      ? injected.replace('</body>', '  <script src="./sync-v1.js"></script>\n</body>')
+      : `${injected}\n<script src="./sync-v1.js"></script>`;
   }
-  const injected = html.includes('</body>')
-    ? html.replace('</body>', '  <script src="./sync-v1.js"></script>\n</body>')
-    : `${html}\n<script src="./sync-v1.js"></script>`;
+  if (!injected.includes('edit-v1.js')) {
+    injected = injected.includes('</body>')
+      ? injected.replace('</body>', '  <script src="./edit-v1.js"></script>\n</body>')
+      : `${injected}\n<script src="./edit-v1.js"></script>`;
+  }
   const headers = new Headers(response.headers);
   headers.set('Content-Type', 'text/html; charset=utf-8');
   return new Response(injected, {
@@ -57,10 +59,10 @@ self.addEventListener('fetch', event => {
           const rawCopy = response.clone();
           caches.open(CACHE_NAME).then(cache => cache.put('./index.html', rawCopy));
         }
-        return injectSyncScript(response);
+        return injectAddOnScripts(response);
       } catch (_) {
         const cached = await caches.match('./index.html');
-        return cached ? injectSyncScript(cached) : Response.error();
+        return cached ? injectAddOnScripts(cached) : Response.error();
       }
     })());
     return;
