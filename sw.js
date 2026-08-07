@@ -1,9 +1,10 @@
-const CACHE_NAME = 'project-200-v7-two-way-sync';
+const CACHE_NAME = 'project-200-v7-two-way-sync-no-key';
 const APP_SHELL = [
   './',
   './index.html',
   './styles-v5.css',
   './app-v5.js',
+  './sync-auto.js',
   './sync-v2.js',
   './edit-v1.js',
   './manifest.webmanifest',
@@ -30,6 +31,11 @@ async function injectAddOnScripts(response) {
   const html = await response.text();
   let injected = html.replace(/\s*<script\s+src=["']\.\/sync-v1\.js["'][^>]*><\/script>\s*/gi, '\n');
 
+  if (!injected.includes('sync-auto.js')) {
+    injected = injected.includes('</body>')
+      ? injected.replace('</body>', '  <script src="./sync-auto.js"></script>\n</body>')
+      : `${injected}\n<script src="./sync-auto.js"></script>`;
+  }
   if (!injected.includes('sync-v2.js')) {
     injected = injected.includes('</body>')
       ? injected.replace('</body>', '  <script src="./sync-v2.js"></script>\n</body>')
