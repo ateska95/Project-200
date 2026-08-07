@@ -1,10 +1,10 @@
-const CACHE_NAME = 'project-200-v5-sheets-edit-v1';
+const CACHE_NAME = 'project-200-v7-two-way-sync';
 const APP_SHELL = [
   './',
   './index.html',
   './styles-v5.css',
   './app-v5.js',
-  './sync-v1.js',
+  './sync-v2.js',
   './edit-v1.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
@@ -28,17 +28,19 @@ self.addEventListener('activate', event => {
 
 async function injectAddOnScripts(response) {
   const html = await response.text();
-  let injected = html;
-  if (!injected.includes('sync-v1.js')) {
+  let injected = html.replace(/\s*<script\s+src=["']\.\/sync-v1\.js["'][^>]*><\/script>\s*/gi, '\n');
+
+  if (!injected.includes('sync-v2.js')) {
     injected = injected.includes('</body>')
-      ? injected.replace('</body>', '  <script src="./sync-v1.js"></script>\n</body>')
-      : `${injected}\n<script src="./sync-v1.js"></script>`;
+      ? injected.replace('</body>', '  <script src="./sync-v2.js"></script>\n</body>')
+      : `${injected}\n<script src="./sync-v2.js"></script>`;
   }
   if (!injected.includes('edit-v1.js')) {
     injected = injected.includes('</body>')
       ? injected.replace('</body>', '  <script src="./edit-v1.js"></script>\n</body>')
       : `${injected}\n<script src="./edit-v1.js"></script>`;
   }
+
   const headers = new Headers(response.headers);
   headers.set('Content-Type', 'text/html; charset=utf-8');
   return new Response(injected, {
